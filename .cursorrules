@@ -1,0 +1,264 @@
+# Trainy Web App
+
+## Project Goal
+Validate NS, DB, and SNCF API integration for European train tracking.
+This web app will test cross-border journey logic before building iOS app.
+
+## Tech Stack
+- React + Vite
+- Supabase (database + auth)
+- TailwindCSS (styling)
+- Direct API calls from browser (for testing)
+
+## Architecture
+Simple SPA that:
+1. Searches trains using NS/DB APIs directly
+2. Displays merged cross-border results
+3. Saves journeys to Supabase
+4. Shows real-time updates
+
+## Code Style
+- Functional components with hooks
+- Async/await for all API calls
+- Clear error handling and loading states
+- Comments explaining API quirks
+- Log all API responses for debugging
+
+## Key Focus
+- Understand how NS and DB APIs work
+- Document cross-border journey merging logic
+- Test edge cases thoroughly
+- Keep code simple and readable (will port to iOS later)
+
+## API Keys
+Store in .env.local (never commit)
+```
+
+### **Initial Cursor Prompt**
+```
+I'm building a web app to test European train APIs before building an iOS app.
+
+Setup a new React project with Vite:
+- Project name: trainy-web
+- Use TypeScript
+- Add TailwindCSS for styling
+- Add Supabase client
+- Create folder structure:
+  - src/services/ (API integrations)
+  - src/components/ (React components)
+  - src/pages/ (main pages)
+  - src/types/ (TypeScript types)
+
+Also create:
+- .env.local template with placeholders for API keys
+- Basic routing setup (React Router)
+- Simple layout with header and navigation
+
+Show me the terminal commands to set this up.
+```
+
+### **Phase 1: NS API Integration**
+
+**Cursor Prompt:**
+```
+Create an NS API service in src/services/nsApi.ts
+
+NS API Base URL: https://gateway.apiportal.ns.nl/reisinformatie-api/api
+Auth: Header "Ocp-Apim-Subscription-Key" with API key from env
+
+Implement these functions with fetch and async/await:
+
+1. searchStations(query: string)
+   - GET /v2/stations?q={query}
+   - Return array of stations
+
+2. searchJourneys(from: string, to: string, dateTime: string)
+   - GET /v3/trips
+   - Return array of journeys with all details
+
+3. getJourneyDetails(trainNumber: string, dateTime: string)
+   - GET /v2/journey
+   - Return journey with all stops and material info
+
+Add proper TypeScript types for all responses.
+Log all requests and responses to console.
+Handle errors gracefully.
+```
+
+**Then:**
+```
+Create a search page (src/pages/SearchPage.tsx) that:
+
+1. Has two input fields with autocomplete:
+   - From station (searches NS API as you type)
+   - To station (same)
+2. Date/time picker
+3. Search button
+4. Loading state while searching
+5. Results displayed as cards showing:
+   - Train number and type
+   - Departure/arrival times and stations
+   - Duration
+   - "View Details" button
+
+Make it functional and clean. Use TailwindCSS for styling.
+Focus on functionality over design for now.
+```
+
+### **Phase 2: Journey Details & Real-time**
+
+**Cursor Prompt:**
+```
+Create a journey detail page (src/pages/JourneyDetailPage.tsx) that shows:
+
+1. Train header (number, type, date)
+2. All stops in timeline format:
+   - Station name
+   - Scheduled time
+   - Platform
+   - Delay (if any)
+3. "Refresh Status" button that:
+   - Calls NS API for current status
+   - Updates delays/platforms
+   - Shows what changed
+4. "Save Journey" button (we'll add Supabase later)
+
+Add a refresh mechanism:
+- Manual refresh button
+- Auto-refresh every 60 seconds
+- Show last updated timestamp
+
+Display which data comes from which API (for learning).
+```
+
+### **Phase 3: Add DB API & Cross-Border**
+
+**Cursor Prompt:**
+```
+Create DB API service in src/services/dbApi.ts
+
+DB API: https://v5.db.transport.rest/
+(No auth needed for community version)
+
+Implement same functions as NS API:
+1. searchStations(query: string)
+2. searchJourneys(from: string, to: string, dateTime: string)  
+3. getJourneyStatus(tripId: string)
+
+Map DB responses to same TypeScript types as NS where possible.
+Note differences in comments.
+```
+
+**Then:**
+```
+Create journey merger utility (src/utils/journeyMerger.ts) that:
+
+mergeJourneys(nsData: Journey[], dbData: Journey[])
+
+Logic:
+1. Match trains by number and departure time (±5 min)
+2. For matched trains:
+   - Combine station lists (NS stations + DB stations)
+   - Mark which API is authoritative for each station
+   - Keep both raw responses for debugging
+3. Return merged journey list
+
+Add detailed logging showing:
+- Which trains matched
+- Which stations came from which API
+- Any conflicts found
+
+This is the CORE LOGIC to validate.
+```
+
+**Then:**
+```
+Update SearchPage.tsx to:
+
+1. Detect if search is cross-border:
+   - Check station countries
+   - If different → query both APIs
+
+2. For cross-border searches:
+   - Show loading for both APIs
+   - Merge results using journeyMerger
+   - Display merged journeys with indicators:
+     "📡 NS + DB" badge
+
+3. Add a toggle to show:
+   - Merged view (default)
+   - Split view (NS results | DB results side by side)
+
+This split view is for testing/learning - see differences.
+```
+
+### **Phase 4: Save to Supabase**
+
+**Cursor Prompt:**
+```
+Set up Supabase integration:
+
+1. Create Supabase service (src/services/supabase.ts)
+2. Add simple auth (email/password)
+3. Create database schema (I'll provide this separately)
+4. Implement save/load journeys
+
+Then update pages to:
+- Require login
+- Save journeys to database
+- Show "My Journeys" page
+- Handle saved journey tracking
+```
+
+---
+
+## 🎯 Timeline Comparison
+
+### **Lovable Approach:**
+- Week 1: Build in Lovable ⚡
+- Week 2: Test & learn
+- Week 3-4: Rebuild in Cursor for iOS 🔄
+- **Total: 4 weeks**
+
+### **Cursor Web Approach:**
+- Week 1: Build web app in Cursor
+- Week 2: Test APIs, validate cross-border logic ✅
+- Week 3-4: Build iOS with learned knowledge
+- **Total: 4 weeks**
+
+**Same timeline, but you:**
+- Learn APIs deeply
+- Have clean, reusable code
+- Keep web app as testing tool
+- Better prepared for iOS
+
+---
+
+## 🤔 Final Decision Framework
+
+**Choose Lovable if:**
+- You want something to show investors/users THIS WEEK
+- Design/UX is more important than code quality right now
+- You're okay rebuilding from scratch
+
+**Choose Cursor Web if:**
+- You want to deeply understand the APIs
+- You value clean, maintainable code
+- You want the web app to be useful long-term
+- You're building this seriously, not just validating concept
+
+---
+
+## My Recommendation: **Start with Cursor Web**
+
+**First prompt to Cursor right now:**
+```
+I'm building a web app to test European train travel APIs (NS, DB, SNCF) before building an iOS app.
+
+Set up a new project:
+- React + Vite + TypeScript
+- TailwindCSS
+- React Router
+- Folder structure ready for API services
+
+Initialize the project and show me the commands to run it.
