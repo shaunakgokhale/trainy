@@ -28,8 +28,11 @@ const TIMETABLES_BASE_URL = "/api/db/timetables";
 const JOURNEYS_BASE_URL = "/api/db/journeys";
 
 // Auth credentials from env (used by Vite proxy, not directly in fetch)
-const DB_CLIENT_ID = import.meta.env.VITE_DB_CLIENT_ID;
-const DB_API_KEY = import.meta.env.VITE_DB_API_KEY;
+// These are read by vite.config.ts for proxy header injection
+const _DB_CLIENT_ID = import.meta.env.VITE_DB_CLIENT_ID;
+const _DB_API_KEY = import.meta.env.VITE_DB_API_KEY;
+void _DB_CLIENT_ID;
+void _DB_API_KEY;
 
 // =============================================================================
 // Raw API response types (DB* prefix per project conventions)
@@ -275,7 +278,8 @@ const extractDestinationFromPath = (ppth?: string): string | undefined => {
 };
 
 // Extract origin station name from ppth (for arrivals, first station is origin)
-const extractOriginFromPath = (ppth?: string): string | undefined => {
+// Note: Currently unused but may be needed for future enhancements
+export const extractOriginFromPath = (ppth?: string): string | undefined => {
   if (!ppth) return undefined;
   const stations = ppth.split("|");
   return stations.length > 0 ? stations[0].trim() : undefined;

@@ -190,7 +190,7 @@ const mapTrip = (trip: NSTripRaw): Journey => {
 
   const stops = rawStops.length
     ? rawStops.map(mapStop)
-    : [origin, destination].filter(Boolean).map(mapStop);
+    : [origin, destination].filter((s): s is NSStopRaw => Boolean(s)).map(mapStop);
 
   return {
     id: trip.uid ?? trip.id ?? "",

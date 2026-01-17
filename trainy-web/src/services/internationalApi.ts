@@ -269,7 +269,6 @@ export const searchJourneys = async (
     dateTime,
   });
 
-  const allJourneys: MergedJourney[] = [];
   const journeysByKey = new Map<string, MergedJourney>();
 
   // Determine which APIs to query based on stations
