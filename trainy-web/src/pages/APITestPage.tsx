@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import * as nsApi from "../services/nsApi";
 import * as dbApi from "../services/dbApi";
-import type { Journey, Station } from "../types/train";
+import * as internationalApi from "../services/internationalApi";
+import type { Journey, Station, MergedJourney, MergedStation, MergedJourneyStop } from "../types/train";
 
-type TabId = "ns" | "db";
+type TabId = "ns" | "db" | "international";
 
 type TestResult<T> = {
   data: T | null;
@@ -303,6 +304,680 @@ function NSApiTest() {
   );
 }
 
+// =============================================================================
+// International API Test Component
+// =============================================================================
+
+type StationSearchState = {
+  query: string;
+  results: MergedStation[];
+  loading: boolean;
+  showDropdown: boolean;
+};
+
+function InternationalApiTest() {
+  // Station selection state
+  const [fromSearch, setFromSearch] = useState<StationSearchState>({
+    query: "Amsterdam Centraal",
+    results: [],
+    loading: false,
+    showDropdown: false,
+  });
+  const [toSearch, setToSearch] = useState<StationSearchState>({
+    query: "Frankfurt",
+    results: [],
+    loading: false,
+    showDropdown: false,
+  });
+  const [selectedFrom, setSelectedFrom] = useState<MergedStation | null>(null);
+  const [selectedTo, setSelectedTo] = useState<MergedStation | null>(null);
+
+  // Journey search state
+  const [dateTime, setDateTime] = useState(
+    new Date().toISOString().slice(0, 16)
+  );
+  const [journeyResult, setJourneyResult] = useState<TestResult<MergedJourney[]>>({
+    data: null,
+    error: null,
+    loading: false,
+    timestamp: null,
+    rawJson: null,
+  });
+
+  // Journey detail view
+  const [selectedJourney, setSelectedJourney] = useState<MergedJourney | null>(null);
+  const [journeyDetails, setJourneyDetails] = useState<MergedJourney | null>(null);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+
+  // Refs for dropdown click-outside handling
+  const fromRef = useRef<HTMLDivElement>(null);
+  const toRef = useRef<HTMLDivElement>(null);
+
+  // Debounce timer refs
+  const fromTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const toTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Close dropdowns when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (fromRef.current && !fromRef.current.contains(event.target as Node)) {
+        setFromSearch((s) => ({ ...s, showDropdown: false }));
+      }
+      if (toRef.current && !toRef.current.contains(event.target as Node)) {
+        setToSearch((s) => ({ ...s, showDropdown: false }));
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Search stations with debounce
+  const handleFromQueryChange = (query: string) => {
+    setFromSearch((s) => ({ ...s, query, showDropdown: true }));
+    setSelectedFrom(null);
+
+    if (fromTimerRef.current) clearTimeout(fromTimerRef.current);
+    if (query.length < 2) {
+      setFromSearch((s) => ({ ...s, results: [], loading: false }));
+      return;
+    }
+
+    setFromSearch((s) => ({ ...s, loading: true }));
+    fromTimerRef.current = setTimeout(async () => {
+      try {
+        const results = await internationalApi.searchStations(query);
+        setFromSearch((s) => ({ ...s, results, loading: false }));
+      } catch {
+        setFromSearch((s) => ({ ...s, results: [], loading: false }));
+      }
+    }, 300);
+  };
+
+  const handleToQueryChange = (query: string) => {
+    setToSearch((s) => ({ ...s, query, showDropdown: true }));
+    setSelectedTo(null);
+
+    if (toTimerRef.current) clearTimeout(toTimerRef.current);
+    if (query.length < 2) {
+      setToSearch((s) => ({ ...s, results: [], loading: false }));
+      return;
+    }
+
+    setToSearch((s) => ({ ...s, loading: true }));
+    toTimerRef.current = setTimeout(async () => {
+      try {
+        const results = await internationalApi.searchStations(query);
+        setToSearch((s) => ({ ...s, results, loading: false }));
+      } catch {
+        setToSearch((s) => ({ ...s, results: [], loading: false }));
+      }
+    }, 300);
+  };
+
+  const selectFromStation = (station: MergedStation) => {
+    setSelectedFrom(station);
+    setFromSearch({
+      query: station.name,
+      results: [],
+      loading: false,
+      showDropdown: false,
+    });
+  };
+
+  const selectToStation = (station: MergedStation) => {
+    setSelectedTo(station);
+    setToSearch({
+      query: station.name,
+      results: [],
+      loading: false,
+      showDropdown: false,
+    });
+  };
+
+  // Search journeys
+  const handleSearchJourneys = async () => {
+    // Auto-search stations if not selected
+    let from = selectedFrom;
+    let to = selectedTo;
+
+    if (!from && fromSearch.query) {
+      const results = await internationalApi.searchStations(fromSearch.query);
+      if (results.length > 0) {
+        from = results[0];
+        setSelectedFrom(from);
+      }
+    }
+    if (!to && toSearch.query) {
+      const results = await internationalApi.searchStations(toSearch.query);
+      if (results.length > 0) {
+        to = results[0];
+        setSelectedTo(to);
+      }
+    }
+
+    if (!from || !to) {
+      setJourneyResult({
+        data: null,
+        error: "Please select both origin and destination stations",
+        loading: false,
+        timestamp: getTimestamp(),
+        rawJson: null,
+      });
+      return;
+    }
+
+    setJourneyResult({
+      data: null,
+      error: null,
+      loading: true,
+      timestamp: null,
+      rawJson: null,
+    });
+    setSelectedJourney(null);
+    setJourneyDetails(null);
+
+    const ts = getTimestamp();
+    console.log(
+      `[APITestPage][${ts}] International Journey Search: ${from.name} → ${to.name} @ ${dateTime}`
+    );
+
+    try {
+      const journeys = await internationalApi.searchJourneys(
+        from,
+        to,
+        new Date(dateTime).toISOString()
+      );
+      console.log(`[APITestPage][${ts}] International Journeys Result:`, journeys);
+      setJourneyResult({
+        data: journeys,
+        error: null,
+        loading: false,
+        timestamp: ts,
+        rawJson: JSON.stringify(journeys, null, 2),
+      });
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : "Unknown error";
+      console.error(`[APITestPage][${ts}] International Journeys Error:`, err);
+      setJourneyResult({
+        data: null,
+        error: errorMsg,
+        loading: false,
+        timestamp: ts,
+        rawJson: null,
+      });
+    }
+  };
+
+  // View journey details
+  const handleSelectJourney = async (journey: MergedJourney) => {
+    setSelectedJourney(journey);
+    setDetailsLoading(true);
+    setJourneyDetails(null);
+
+    try {
+      const details = await internationalApi.getJourneyDetails(journey);
+      setJourneyDetails(details);
+    } catch (err) {
+      console.error("Failed to get journey details:", err);
+      setJourneyDetails(journey); // Fallback to original journey
+    } finally {
+      setDetailsLoading(false);
+    }
+  };
+
+  const closeJourneyDetail = () => {
+    setSelectedJourney(null);
+    setJourneyDetails(null);
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Station Search Section */}
+      <section className="rounded border bg-white p-4">
+        <h3 className="mb-3 text-lg font-semibold">International Journey Search</h3>
+        <p className="mb-4 text-sm text-gray-600">
+          Search for train journeys between Netherlands and Germany. Combines NS and DB
+          API data for complete cross-border coverage.
+        </p>
+
+        <div className="grid gap-4 md:grid-cols-3">
+          {/* From Station */}
+          <div ref={fromRef} className="relative">
+            <label className="mb-1 block text-xs font-medium text-gray-700">
+              From Station
+            </label>
+            <input
+              type="text"
+              value={fromSearch.query}
+              onChange={(e) => handleFromQueryChange(e.target.value)}
+              onFocus={() => setFromSearch((s) => ({ ...s, showDropdown: true }))}
+              placeholder="e.g. Amsterdam Centraal"
+              className={`w-full rounded border px-3 py-2 text-sm ${
+                selectedFrom ? "border-green-500 bg-green-50" : ""
+              }`}
+            />
+            {selectedFrom && (
+              <span className="absolute right-2 top-7 text-green-600">✓</span>
+            )}
+            {fromSearch.loading && (
+              <div className="absolute right-2 top-7">
+                <LoadingSpinner />
+              </div>
+            )}
+            {fromSearch.showDropdown && fromSearch.results.length > 0 && (
+              <ul className="absolute z-10 mt-1 max-h-48 w-full overflow-auto rounded border bg-white shadow-lg">
+                {fromSearch.results.slice(0, 10).map((station, idx) => (
+                  <li
+                    key={`${station.code}-${idx}`}
+                    onClick={() => selectFromStation(station)}
+                    className="cursor-pointer px-3 py-2 text-sm hover:bg-blue-50"
+                  >
+                    <span className="font-medium">{station.name}</span>
+                    <span className="ml-2 text-xs text-gray-500">
+                      {station.country} ({station.authoritative})
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {/* To Station */}
+          <div ref={toRef} className="relative">
+            <label className="mb-1 block text-xs font-medium text-gray-700">
+              To Station
+            </label>
+            <input
+              type="text"
+              value={toSearch.query}
+              onChange={(e) => handleToQueryChange(e.target.value)}
+              onFocus={() => setToSearch((s) => ({ ...s, showDropdown: true }))}
+              placeholder="e.g. Frankfurt"
+              className={`w-full rounded border px-3 py-2 text-sm ${
+                selectedTo ? "border-green-500 bg-green-50" : ""
+              }`}
+            />
+            {selectedTo && (
+              <span className="absolute right-2 top-7 text-green-600">✓</span>
+            )}
+            {toSearch.loading && (
+              <div className="absolute right-2 top-7">
+                <LoadingSpinner />
+              </div>
+            )}
+            {toSearch.showDropdown && toSearch.results.length > 0 && (
+              <ul className="absolute z-10 mt-1 max-h-48 w-full overflow-auto rounded border bg-white shadow-lg">
+                {toSearch.results.slice(0, 10).map((station, idx) => (
+                  <li
+                    key={`${station.code}-${idx}`}
+                    onClick={() => selectToStation(station)}
+                    className="cursor-pointer px-3 py-2 text-sm hover:bg-blue-50"
+                  >
+                    <span className="font-medium">{station.name}</span>
+                    <span className="ml-2 text-xs text-gray-500">
+                      {station.country} ({station.authoritative})
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {/* Date/Time */}
+          <div>
+            <label className="mb-1 block text-xs font-medium text-gray-700">
+              Date & Time
+            </label>
+            <input
+              type="datetime-local"
+              value={dateTime}
+              onChange={(e) => setDateTime(e.target.value)}
+              className="w-full rounded border px-3 py-2 text-sm"
+            />
+          </div>
+        </div>
+
+        <button
+          onClick={handleSearchJourneys}
+          disabled={journeyResult.loading}
+          className="mt-4 rounded bg-purple-600 px-6 py-2 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50"
+        >
+          {journeyResult.loading ? (
+            <span className="flex items-center gap-2">
+              <LoadingSpinner /> Searching both APIs...
+            </span>
+          ) : (
+            "Search International Journeys"
+          )}
+        </button>
+
+        {journeyResult.timestamp && (
+          <p className="mt-2 text-xs text-gray-400">
+            Searched at: {journeyResult.timestamp}
+          </p>
+        )}
+      </section>
+
+      {/* Error Display */}
+      {journeyResult.error && (
+        <div className="rounded bg-red-100 p-3 text-sm text-red-700">
+          {journeyResult.error}
+        </div>
+      )}
+
+      {/* Journey Results */}
+      {journeyResult.data && journeyResult.data.length > 0 && !selectedJourney && (
+        <section className="rounded border bg-white p-4">
+          <h3 className="mb-3 font-semibold">
+            Found {journeyResult.data.length} Journey{journeyResult.data.length !== 1 ? "s" : ""}
+          </h3>
+          <p className="mb-3 text-xs text-gray-500">
+            Click on a journey to see detailed stop information
+          </p>
+          <InternationalJourneyList
+            journeys={journeyResult.data}
+            onSelect={handleSelectJourney}
+          />
+          <CollapsibleJson json={journeyResult.rawJson} />
+        </section>
+      )}
+
+      {journeyResult.data && journeyResult.data.length === 0 && (
+        <div className="rounded bg-yellow-50 p-4 text-sm text-yellow-800">
+          No journeys found for this route. Try adjusting the date/time or station names.
+        </div>
+      )}
+
+      {/* Journey Detail View */}
+      {selectedJourney && (
+        <section className="rounded border bg-white p-4">
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="font-semibold">
+              Journey Details: {selectedJourney.trainType} {selectedJourney.trainNumber}
+            </h3>
+            <button
+              onClick={closeJourneyDetail}
+              className="rounded bg-gray-100 px-3 py-1 text-sm text-gray-600 hover:bg-gray-200"
+            >
+              ← Back to Results
+            </button>
+          </div>
+
+          {detailsLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <LoadingSpinner />
+              <span className="ml-2 text-sm text-gray-500">Loading journey details...</span>
+            </div>
+          ) : (
+            <JourneyDetailView journey={journeyDetails ?? selectedJourney} />
+          )}
+        </section>
+      )}
+    </div>
+  );
+}
+
+// International journey list component
+function InternationalJourneyList({
+  journeys,
+  onSelect,
+}: {
+  journeys: MergedJourney[];
+  onSelect: (journey: MergedJourney) => void;
+}) {
+  return (
+    <ul className="space-y-2">
+      {journeys.map((journey, idx) => (
+        <li
+          key={`${journey.deduplicationKey}-${idx}`}
+          onClick={() => onSelect(journey)}
+          className="cursor-pointer rounded border bg-gray-50 p-3 transition-colors hover:border-purple-300 hover:bg-purple-50"
+        >
+          <div className="flex items-start justify-between">
+            <div>
+              <span className="font-medium">
+                {journey.trainType} {journey.trainNumber}
+              </span>
+              <span className="ml-2 text-sm text-gray-500">{journey.operator}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span
+                className={`rounded px-2 py-0.5 text-xs ${
+                  journey.apiSource === "merged"
+                    ? "bg-purple-100 text-purple-700"
+                    : journey.apiSource === "NS"
+                      ? "bg-blue-100 text-blue-700"
+                      : "bg-green-100 text-green-700"
+                }`}
+              >
+                {journey.apiSource}
+              </span>
+              <span
+                className={`rounded px-2 py-0.5 text-xs ${
+                  journey.status === "cancelled"
+                    ? "bg-red-200 text-red-800"
+                    : journey.status === "delayed"
+                      ? "bg-yellow-200 text-yellow-800"
+                      : "bg-green-200 text-green-800"
+                }`}
+              >
+                {journey.status}
+              </span>
+            </div>
+          </div>
+
+          <div className="mt-2 flex items-center text-sm">
+            <div className="flex-1">
+              <div className="font-medium">{journey.departure.station.name}</div>
+              <div className="text-gray-500">
+                {formatTime(journey.departure.scheduledDeparture)}
+                {journey.departure.platform && (
+                  <span className="ml-2">Platform {journey.departure.platform}</span>
+                )}
+              </div>
+            </div>
+            <div className="px-4 text-center text-gray-400">
+              <div className="text-xs">{journey.duration} min</div>
+              <div className="text-lg">→</div>
+            </div>
+            <div className="flex-1 text-right">
+              <div className="font-medium">{journey.arrival.station.name}</div>
+              <div className="text-gray-500">
+                {formatTime(journey.arrival.scheduledArrival)}
+                {journey.arrival.platform && (
+                  <span className="ml-2">Platform {journey.arrival.platform}</span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {journey.transfers > 0 && (
+            <div className="mt-2 text-xs text-orange-600">
+              {journey.transfers} transfer{journey.transfers !== 1 ? "s" : ""}
+            </div>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+// Journey detail view with all stops
+function JourneyDetailView({ journey }: { journey: MergedJourney }) {
+  // Get stops from the journey - prefer legs[0].stops if available
+  const stops: MergedJourneyStop[] =
+    journey.legs[0]?.stops?.length > 0
+      ? journey.legs[0].stops
+      : (journey.stops as MergedJourneyStop[]) ?? [];
+
+  return (
+    <div>
+      {/* Journey summary */}
+      <div className="mb-4 rounded bg-gray-50 p-3">
+        <div className="grid gap-4 md:grid-cols-4">
+          <div>
+            <div className="text-xs text-gray-500">Train</div>
+            <div className="font-medium">
+              {journey.trainType} {journey.trainNumber}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-500">Operator</div>
+            <div className="font-medium">{journey.operator}</div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-500">Duration</div>
+            <div className="font-medium">{journey.duration} minutes</div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-500">Status</div>
+            <div
+              className={`inline-block rounded px-2 py-0.5 text-sm font-medium ${
+                journey.status === "cancelled"
+                  ? "bg-red-100 text-red-700"
+                  : journey.status === "delayed"
+                    ? "bg-yellow-100 text-yellow-700"
+                    : "bg-green-100 text-green-700"
+              }`}
+            >
+              {journey.status}
+            </div>
+          </div>
+        </div>
+        <div className="mt-2 text-xs text-gray-500">
+          Data sources: {journey.nsJourney ? "NS" : ""}{" "}
+          {journey.nsJourney && journey.dbJourney ? "+ " : ""}
+          {journey.dbJourney ? "DB" : ""}
+          {!journey.nsJourney && !journey.dbJourney ? journey.apiSource : ""}
+        </div>
+      </div>
+
+      {/* Stops timeline */}
+      <div className="mb-4">
+        <h4 className="mb-2 text-sm font-semibold">Route & Stops</h4>
+        {stops.length === 0 ? (
+          <p className="text-sm text-gray-500">
+            No detailed stop information available. Showing departure and arrival only.
+          </p>
+        ) : null}
+      </div>
+
+      <div className="relative">
+        {/* Timeline line */}
+        <div className="absolute left-4 top-2 h-[calc(100%-16px)] w-0.5 bg-gray-200" />
+
+        {/* Departure */}
+        <StopItem
+          stop={journey.departure as MergedJourneyStop}
+          type="departure"
+          isFirst={true}
+        />
+
+        {/* Intermediate stops */}
+        {stops
+          .filter(
+            (stop) =>
+              stop.station.name !== journey.departure.station.name &&
+              stop.station.name !== journey.arrival.station.name
+          )
+          .map((stop, idx) => (
+            <StopItem
+              key={`${stop.station.code || stop.station.name}-${idx}`}
+              stop={stop}
+              type="intermediate"
+              isFirst={false}
+            />
+          ))}
+
+        {/* Arrival */}
+        <StopItem
+          stop={journey.arrival as MergedJourneyStop}
+          type="arrival"
+          isFirst={false}
+        />
+      </div>
+    </div>
+  );
+}
+
+// Individual stop in the timeline
+function StopItem({
+  stop,
+  type,
+  isFirst,
+}: {
+  stop: MergedJourneyStop;
+  type: "departure" | "intermediate" | "arrival";
+  isFirst: boolean;
+}) {
+  const time =
+    type === "departure" ? stop.scheduledDeparture : stop.scheduledArrival;
+  const delay =
+    type === "departure" ? stop.departureDelay : stop.arrivalDelay;
+
+  return (
+    <div className={`relative flex items-start gap-4 ${isFirst ? "" : "mt-3"}`}>
+      {/* Timeline dot */}
+      <div
+        className={`relative z-10 flex h-8 w-8 items-center justify-center rounded-full ${
+          type === "departure"
+            ? "bg-green-500 text-white"
+            : type === "arrival"
+              ? "bg-red-500 text-white"
+              : "bg-white border-2 border-gray-300"
+        }`}
+      >
+        {type === "departure" && "↑"}
+        {type === "arrival" && "↓"}
+        {type === "intermediate" && "•"}
+      </div>
+
+      {/* Stop info */}
+      <div className="flex-1 pb-2">
+        <div className="flex items-start justify-between">
+          <div>
+            <div className="font-medium">{stop.station.name}</div>
+            <div className="text-xs text-gray-500">
+              {stop.station.country}
+              {stop.source && ` • via ${stop.source} API`}
+            </div>
+          </div>
+          <div className="text-right">
+            <div className="font-medium">{formatTime(time)}</div>
+            {delay && delay > 0 && (
+              <div className="text-xs text-red-600">+{delay} min</div>
+            )}
+          </div>
+        </div>
+
+        {/* Platform info */}
+        {stop.platform && (
+          <div className="mt-1 inline-block rounded bg-blue-100 px-2 py-0.5 text-xs text-blue-700">
+            Platform {stop.platform}
+            {stop.plannedPlatform &&
+              stop.actualPlatform &&
+              stop.plannedPlatform !== stop.actualPlatform && (
+                <span className="ml-1 text-orange-600">
+                  (was {stop.plannedPlatform})
+                </span>
+              )}
+          </div>
+        )}
+
+        {stop.cancelled && (
+          <div className="mt-1 inline-block rounded bg-red-100 px-2 py-0.5 text-xs text-red-700">
+            Cancelled
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
+// DB API Test Component (existing)
+// =============================================================================
+
 function DBApiTest() {
   const [stationQuery, setStationQuery] = useState("Frankfurt");
   const [stationResult, setStationResult] = useState<TestResult<Station[]>>({
@@ -485,18 +1160,28 @@ function DBApiTest() {
 }
 
 export default function APITestPage() {
-  const [activeTab, setActiveTab] = useState<TabId>("ns");
+  const [activeTab, setActiveTab] = useState<TabId>("international");
 
   return (
     <div>
       <h1 className="mb-4 text-2xl font-bold">API Test Page</h1>
       <p className="mb-6 text-sm text-gray-600">
-        Test NS and DB API integrations. Check the browser console for detailed
+        Test NS, DB, and International API integrations. Check the browser console for detailed
         logs.
       </p>
 
       {/* Tabs */}
       <div className="mb-6 flex border-b">
+        <button
+          onClick={() => setActiveTab("international")}
+          className={`px-4 py-2 text-sm font-medium ${
+            activeTab === "international"
+              ? "border-b-2 border-purple-600 text-purple-600"
+              : "text-gray-500 hover:text-gray-700"
+          }`}
+        >
+          International (NL ↔ DE)
+        </button>
         <button
           onClick={() => setActiveTab("ns")}
           className={`px-4 py-2 text-sm font-medium ${
@@ -520,6 +1205,7 @@ export default function APITestPage() {
       </div>
 
       {/* Tab Content */}
+      {activeTab === "international" && <InternationalApiTest />}
       {activeTab === "ns" && <NSApiTest />}
       {activeTab === "db" && <DBApiTest />}
     </div>
