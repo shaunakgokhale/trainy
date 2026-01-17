@@ -667,7 +667,7 @@ export const searchJourneys = async (
     destDateTime.toISOString().slice(2, 10).replace(/-/g, "")
   }/${destDateTime.getHours().toString().padStart(2, "0")}`;
 
-  let arrivals: Map<string, { time: string; stationName: string }> = new Map();
+  const arrivals: Map<string, { time: string; stationName: string }> = new Map();
   
   try {
     const { data: destData } = await fetchXml<{ timetable?: DBTimetablePlanResponse }>(destUrl, {

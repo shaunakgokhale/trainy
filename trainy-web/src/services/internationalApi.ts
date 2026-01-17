@@ -67,6 +67,14 @@ export const searchStations = async (query: string): Promise<MergedStation[]> =>
   const results: MergedStation[] = [];
   const seenNames = new Set<string>();
 
+  // Check for known stations first (provides faster results for common routes)
+  const knownStation = findKnownStation(query);
+  if (knownStation) {
+    logInfo(`Found known station: ${knownStation.name}`);
+    seenNames.add(knownStation.name.toLowerCase().trim());
+    results.push(knownStation);
+  }
+
   // Search both APIs in parallel
   const [nsResult, dbResult] = await Promise.allSettled([
     nsApi.searchStations(query),
@@ -525,3 +533,61 @@ export const KNOWN_STATIONS = {
     authoritative: "DB" as const,
   },
 } as const;
+
+/**
+ * Station name aliases for common search terms
+ * Maps user-friendly names to the known stations
+ */
+export const STATION_ALIASES: Record<string, typeof KNOWN_STATIONS[keyof typeof KNOWN_STATIONS]> = {
+  // Amsterdam
+  "amsterdam": KNOWN_STATIONS.AMSTERDAM_CENTRAAL,
+  "amsterdam centraal": KNOWN_STATIONS.AMSTERDAM_CENTRAAL,
+  "amsterdam central": KNOWN_STATIONS.AMSTERDAM_CENTRAAL,
+  "amsterdam cs": KNOWN_STATIONS.AMSTERDAM_CENTRAAL,
+  
+  // Frankfurt
+  "frankfurt": KNOWN_STATIONS.FRANKFURT_HBF,
+  "frankfurt hbf": KNOWN_STATIONS.FRANKFURT_HBF,
+  "frankfurt main": KNOWN_STATIONS.FRANKFURT_HBF,
+  "frankfurt am main": KNOWN_STATIONS.FRANKFURT_HBF,
+  "frankfurt(main)hbf": KNOWN_STATIONS.FRANKFURT_HBF,
+  
+  // Köln
+  "köln": KNOWN_STATIONS.KOLN_HBF,
+  "koln": KNOWN_STATIONS.KOLN_HBF,
+  "cologne": KNOWN_STATIONS.KOLN_HBF,
+  "köln hbf": KNOWN_STATIONS.KOLN_HBF,
+  "koln hbf": KNOWN_STATIONS.KOLN_HBF,
+  
+  // Düsseldorf
+  "düsseldorf": KNOWN_STATIONS.DUSSELDORF_HBF,
+  "dusseldorf": KNOWN_STATIONS.DUSSELDORF_HBF,
+  "düsseldorf hbf": KNOWN_STATIONS.DUSSELDORF_HBF,
+  "dusseldorf hbf": KNOWN_STATIONS.DUSSELDORF_HBF,
+  
+  // Utrecht
+  "utrecht": KNOWN_STATIONS.UTRECHT_CENTRAAL,
+  "utrecht centraal": KNOWN_STATIONS.UTRECHT_CENTRAAL,
+  "utrecht cs": KNOWN_STATIONS.UTRECHT_CENTRAAL,
+  
+  // Arnhem
+  "arnhem": KNOWN_STATIONS.ARNHEM_CENTRAAL,
+  "arnhem centraal": KNOWN_STATIONS.ARNHEM_CENTRAAL,
+};
+
+/**
+ * Try to find a known station from a search query
+ */
+export const findKnownStation = (query: string): MergedStation | null => {
+  const normalized = query.toLowerCase().trim();
+  const known = STATION_ALIASES[normalized];
+  
+  if (known) {
+    return {
+      ...known,
+      authoritative: known.authoritative,
+    };
+  }
+  
+  return null;
+};

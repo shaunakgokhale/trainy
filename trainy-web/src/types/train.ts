@@ -39,7 +39,8 @@ export type Journey = {
   duration: number;
   status: JourneyStatus;
   apiSource: ApiSource;
-  rawData?: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  rawData?: any; // Intentionally any - stores original API response for debugging
 };
 
 export type JourneySearchParams = {
