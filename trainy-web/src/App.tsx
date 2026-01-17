@@ -1,5 +1,6 @@
 import { BrowserRouter, Link, Route, Routes } from 'react-router-dom'
 
+import APITestPage from './pages/APITestPage'
 import MyJourneysPage from './pages/MyJourneysPage'
 import SearchPage from './pages/SearchPage'
 
@@ -20,6 +21,12 @@ function App() {
               >
                 My Journeys
               </Link>
+              <Link
+                className="text-slate-700 hover:text-slate-900"
+                to="/test"
+              >
+                API Test
+              </Link>
             </nav>
           </div>
         </header>
@@ -27,6 +34,7 @@ function App() {
           <Routes>
             <Route path="/" element={<SearchPage />} />
             <Route path="/journeys" element={<MyJourneysPage />} />
+            <Route path="/test" element={<APITestPage />} />
           </Routes>
         </main>
       </div>
