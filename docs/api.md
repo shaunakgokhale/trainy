@@ -2,21 +2,77 @@
 
 This document details all API integrations used in Trainy for AI agents and developers.
 
-## Overview
+## Architecture Overview
 
-Trainy uses three European rail APIs:
+Trainy uses a 3-layer architecture for international train search:
 
-| Provider | Country | Service File | Auth Required |
-|----------|---------|--------------|---------------|
-| NS (Nederlandse Spoorwegen) | Netherlands | `src/services/nsApi.ts` | Yes (API Key) |
-| DB (Deutsche Bahn) | Germany | `src/services/dbApi.ts` | Yes (Client ID + API Key) |
-| SNCF | France | `src/services/sncfApi.ts` | Yes (API Key) - Not yet implemented |
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Layer 3: Orchestration (internationalApi.ts)                   │
+│  - Coordinates providers, merges data, stores to Supabase       │
+├─────────────────────────────────────────────────────────────────┤
+│  Layer 2: Station Registry (stationRegistry.ts)                 │
+│  - Unified station IDs across providers                         │
+├─────────────────────────────────────────────────────────────────┤
+│  Layer 1: Providers (nsProvider.ts, dbProvider.ts)              │
+│  - Each wraps a low-level API (nsApi.ts, dbApi.ts)             │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## Supported Providers
+
+| Provider | Country | Status | Service Files |
+|----------|---------|--------|---------------|
+| NS (Nederlandse Spoorwegen) | Netherlands | ✅ Active | `nsApi.ts`, `nsProvider.ts` |
+| DB (Deutsche Bahn) | Germany | ✅ Active | `dbApi.ts`, `dbProvider.ts` |
+| SNCF | France | 🔜 Planned | - |
+| OBB | Austria | 🔜 Planned | - |
+| SBB | Switzerland | 🔜 Planned | - |
+
+---
+
+## Provider Interface
+
+All providers implement the `TrainProvider` interface:
+
+```typescript
+// src/services/providers/types.ts
+
+interface TrainProvider {
+  readonly id: ProviderID;      // "NS" | "DB" | "SNCF" | "OBB" | "SBB"
+  readonly country: CountryCode; // "NL" | "DE" | "FR" | "AT" | "CH"
+  readonly name: string;         // "Nederlandse Spoorwegen"
+
+  searchStations(query: string): Promise<Station[]>;
+  searchJourneys(params: JourneySearchParams): Promise<Journey[]>;
+  getJourneyDetails(journeyId: string): Promise<Journey | null>;
+  toProviderStationId(station: UnifiedStation): string | null;
+  canHandleStation(station: UnifiedStation): boolean;
+}
+```
+
+### Provider Registry
+
+```typescript
+// Get provider by ID
+import { getProvider } from './services/providers';
+const ns = getProvider("NS");
+
+// Get provider for a country
+import { getProviderForCountry } from './services/providers';
+const provider = getProviderForCountry("DE"); // Returns DB provider
+
+// Get all active providers
+import { getActiveProviders } from './services/providers';
+const providers = getActiveProviders(); // [nsProvider, dbProvider]
+```
 
 ---
 
 ## NS API (Netherlands)
 
-**Service file:** `trainy-web/src/services/nsApi.ts`
+**Provider:** `src/services/providers/nsProvider.ts`
+**Low-level API:** `src/services/nsApi.ts`
 
 ### Authentication
 
@@ -34,7 +90,7 @@ Headers: {
 https://gateway.apiportal.ns.nl/reisinformatie-api/api
 ```
 
-### Endpoints Used
+### Endpoints
 
 | Function | Endpoint | Purpose |
 |----------|----------|---------|
@@ -42,29 +98,23 @@ https://gateway.apiportal.ns.nl/reisinformatie-api/api
 | `searchJourneys(params)` | `GET /v3/trips` | Find journeys between stations |
 | `getJourneyDetails(trainNumber, dateTime)` | `GET /v2/journey` | Get detailed journey info |
 
-### Response Mapping
-
-NS API responses are mapped to shared types in `src/types/train.ts`:
-- `NSStationRaw` → `Station`
-- `NSJourneyRaw` → `Journey`
-- `NSStopRaw` → `JourneyStop`
-
 ### Key Quirks
 
 - Times are ISO strings
 - Delays are in minutes (no conversion needed)
 - Platform info in `plannedPlatform` and `actualPlatform` fields
-- Journey status derived from `status` field
+- Can search for German stations directly (good international coverage)
 
 ---
 
 ## DB API (Germany)
 
-**Service file:** `trainy-web/src/services/dbApi.ts`
+**Provider:** `src/services/providers/dbProvider.ts`
+**Low-level API:** `src/services/dbApi.ts`
 
-DB integration uses **two separate APIs** for different purposes:
+DB integration uses **two separate APIs**:
 
-### Authentication (Both APIs)
+### Authentication
 
 ```typescript
 Headers: {
@@ -73,215 +123,221 @@ Headers: {
 }
 ```
 
-**Environment variables:**
-- `VITE_DB_CLIENT_ID`
-- `VITE_DB_API_KEY`
+**Environment variables:** `VITE_DB_CLIENT_ID`, `VITE_DB_API_KEY`
 
-### Local Development (CORS)
+### CORS Proxy (Development)
 
-DB APIs do not allow browser CORS directly. In dev, the Vite server proxies DB calls:
+DB APIs don't support browser CORS. Vite proxies these calls:
 
 - Timetables: `http://localhost:5173/api/db/timetables/*`
 - RIS::Journeys: `http://localhost:5173/api/db/journeys/*`
 
-Proxy config lives in `trainy-web/vite.config.ts` and injects `DB-Client-Id` / `DB-Api-Key`.
-
----
+Proxy config in `vite.config.ts` injects auth headers.
 
 ### Timetables API (Station-centric)
 
 **Base URL:** `https://apis.deutschebahn.com/db/apis/timetables/v1`
-**Documentation:** https://developers.deutschebahn.com/db-api-marketplace/apis/product/timetables
-**License:** Free (CC BY 4.0)
-**Rate limit:** 60 calls/min
-
-#### Endpoints
 
 | Function | Endpoint | Purpose |
 |----------|----------|---------|
-| `searchStations(query)` | `GET /station/{pattern}` | Search stations by name pattern |
-| `getDepartures(evaNo, dateTime)` | `GET /plan/{evaNo}/{date}/{hour}` | Get departure board at station |
-| `getFullChanges(evaNo)` | `GET /fchg/{evaNo}` | Get all real-time changes |
-| `getRecentChanges(evaNo)` | `GET /rchg/{evaNo}` | Get recent changes only |
+| `searchStations(query)` | `GET /station/{pattern}` | Search stations |
+| `getDepartures(evaNo, dateTime)` | `GET /plan/{evaNo}/{date}/{hour}` | Departure board |
+| `getFullChanges(evaNo)` | `GET /fchg/{evaNo}` | Real-time changes |
 
-#### Response Format
+**Response format:** XML (parsed to JSON internally)
 
-**Important:** Timetables API returns **XML**, not JSON. The service includes a parser:
-
-```typescript
-const parseXmlToObject = (xmlString: string): Record<string, unknown> => { ... }
-```
-
-#### Time Format Quirk
-
-Timetables uses `YYMMDDHHMM` format (e.g., `2601171430` = Jan 17, 2026 14:30).
-Converted to ISO via `parseTimetableTime()`:
-
-```typescript
-const parseTimetableTime = (timeStr?: string): string | undefined => {
-  // "2601171430" → "2026-01-17T14:30:00"
-}
-```
-
-#### Station Identifiers
-
-- **EVA numbers**: 7-digit station codes (e.g., `8000105` for Frankfurt Hbf)
-- **DS100 codes**: Short station codes (e.g., `FF` for Frankfurt)
-
----
+**Time format:** `YYMMDDHHMM` (e.g., `2601171430` = Jan 17, 2026 14:30)
 
 ### RIS::Journeys API (Journey-centric)
 
 **Base URL:** `https://apis.deutschebahn.com/db/apis/ris-journeys/v2`
-**Documentation:** https://developers.deutschebahn.com/db-api-marketplace/apis/product/ris-journeys-transporteure
-
-#### Endpoints
 
 | Function | Endpoint | Purpose |
 |----------|----------|---------|
-| `findJourneys(trainNumber, dateTime)` | `GET /find` | Find trains by train number |
-| `getJourneyDetails(journeyId)` | `GET /{journeyID}` | Get full journey with all stops |
+| `findJourneys(trainNumber, dateTime)` | `GET /find` | Find by train number |
+| `getJourneyDetails(journeyId)` | `GET /{journeyID}` | Full journey with stops |
 
-#### Response Format
+**Response format:** JSON
 
-RIS::Journeys returns **JSON** with this structure:
+### Station Identifiers
+
+- **EVA numbers**: 7-digit codes (e.g., `8000105` for Frankfurt Hbf)
+- **DS100 codes**: Short codes (e.g., `FF` for Frankfurt)
+
+---
+
+## Station Registry
+
+Unified station definitions with cross-provider mappings:
 
 ```typescript
-type DBJourneyRaw = {
-  journeyID?: string;
-  train?: {
-    journeyNumber?: string;
-    type?: string;        // ICE, IC, RE, etc.
-    category?: string;
-    operator?: { name?: string };
-  };
-  departure?: DBEventRaw;
-  arrival?: DBEventRaw;
-  events?: DBEventRaw[];  // All stops
-  cancelled?: boolean;
+// src/data/stationRegistry.ts
+
+const STATION_REGISTRY = {
+  "amsterdam-centraal": {
+    id: "amsterdam-centraal",
+    displayName: "Amsterdam Centraal",
+    country: "NL",
+    providerIds: {
+      NS: "ASD",           // NS station code
+      DB: "8400058",       // EVA number
+    },
+  },
+  "frankfurt-hbf": {
+    id: "frankfurt-hbf",
+    displayName: "Frankfurt (Main) Hbf",
+    country: "DE",
+    providerIds: {
+      NS: "Frankfurt (Main) Hbf",  // NS uses name
+      DB: "8000105",               // EVA number
+    },
+  },
+  // ... more stations
 };
 ```
 
----
-
-### When to Use Which DB API
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     USE CASE                                │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  Search for a station?     → searchStations()  [Timetables] │
-│  See departures at station → getDepartures()   [Timetables] │
-│  Check delays/changes      → getFullChanges()  [Timetables] │
-│                                                             │
-│  Look up specific train    → findJourneys()    [Journeys]   │
-│  View all stops on journey → getJourneyDetails() [Journeys] │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Shared Types
-
-All API responses are mapped to shared types in `src/types/train.ts`:
+### Lookup Functions
 
 ```typescript
-// Core types
-export type Station = {
-  code: string;           // Station code (e.g., "ASD", "8000105")
-  name: string;
-  country: string;        // 2-letter: "NL", "DE", "FR"
-  uicCode?: string;       // International code
-  lat?: number;
-  lng?: number;
-};
+import { 
+  findStationsByName,
+  findStationByProviderId,
+  getStationById,
+  getProviderStationId 
+} from './data/stationRegistry';
 
-export type JourneyStop = {
-  station: Station;
-  scheduledArrival?: string;
-  scheduledDeparture?: string;
-  platform?: string;
-  plannedPlatform?: string;
-  actualPlatform?: string;
-  departureDelay?: number;  // minutes
-  arrivalDelay?: number;    // minutes
-  cancelled?: boolean;
-};
+// Search by name
+const stations = findStationsByName("amsterdam");
 
-export type Journey = {
-  id: string;
-  trainNumber: string;
-  trainType: string;        // ICE, IC, TGV, etc.
-  operator: string;         // NS, DB, SNCF
-  departure: JourneyStop;
-  arrival: JourneyStop;
-  stops: JourneyStop[];
-  duration: number;         // minutes
-  status: JourneyStatus;
-  apiSource: ApiSource;
-  rawData?: unknown;        // Original API response
-};
+// Find by provider ID
+const station = findStationByProviderId("8000105", "DB");
 
-export type JourneyStatus = "scheduled" | "delayed" | "cancelled" | "departed" | "arrived";
-export type ApiSource = "NS" | "DB" | "SNCF" | "merged";
+// Get provider-specific ID
+const evaNumber = getProviderStationId(station, "DB"); // "8000105"
 ```
 
----
-
-## Type Naming Conventions
-
-| Prefix/Suffix | Meaning | Example |
-|---------------|---------|---------|
-| `NS*` | NS API raw types | `NSStationRaw` |
-| `DB*` | DB API raw types | `DBJourneyRaw`, `DBTimetableStopRaw` |
-| `SNCF*` | SNCF API raw types | `SNCFTripRaw` |
-| `Merged*` | Combined cross-border types | `MergedJourney` |
-| `*Raw` | Untransformed API response | `NSStationRaw` |
-
----
-
-## Logging Pattern
-
-All API services use consistent logging:
+### Station Aliases
 
 ```typescript
-// Request logging
-console.log(`[NS API][${timestamp}] Request`, { method, url, params });
+// src/data/stationAliases.ts
 
-// Response logging
-console.log(`[NS API][${timestamp}] Response`, { status, preview });
-
-// Error logging
-console.error(`[NS API][${timestamp}] searchStations error`, error);
-```
-
----
-
-## Error Handling Pattern
-
-All API functions follow this pattern:
-
-```typescript
-export const someFunction = async (params): Promise<ReturnType> => {
-  try {
-    const url = new URL(`${BASE_URL}/endpoint`);
-    // ... set params ...
-    
-    const { data } = await fetchJson<ResponseType>(url.toString());
-    return data.items.map(mapToSharedType);
-    
-  } catch (error) {
-    console.error(`[API][${getTimestamp()}] someFunction error`, error);
-    throw new Error("Failed to do something.");
-  }
+const STATION_ALIASES = {
+  "amsterdam": "amsterdam-centraal",
+  "amsterdam cs": "amsterdam-centraal",
+  "frankfurt": "frankfurt-hbf",
+  "köln": "koln-hbf",
+  "cologne": "koln-hbf",
+  // ...
 };
 ```
 
 ---
 
-## Environment Variables Summary
+## Supabase Storage
+
+### Database Schema
+
+**Table: `journeys`**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | uuid | Primary key |
+| journey_key | text | Unique: `{trainType}{trainNumber}_{originId}_{departureISO}` |
+| train_number | text | e.g., "123" |
+| train_type | text | e.g., "ICE" |
+| operator | text | e.g., "DB" |
+| origin_station_id | text | Registry ID (e.g., "amsterdam-centraal") |
+| destination_station_id | text | Registry ID |
+| scheduled_departure | timestamptz | |
+| scheduled_arrival | timestamptz | |
+| duration_minutes | int | |
+| status | text | scheduled/delayed/cancelled |
+| sources | text[] | ["NS", "DB"] - which APIs contributed |
+| ns_raw_id | text | Original NS journey ID |
+| db_raw_id | text | Original DB journey ID |
+
+**Table: `journey_stops`**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | uuid | Primary key |
+| journey_id | uuid | FK to journeys |
+| sequence | int | Stop order (0, 1, 2...) |
+| station_id | text | Registry ID |
+| station_name | text | Display name |
+| country | text | Country code |
+| scheduled_arrival | timestamptz | |
+| scheduled_departure | timestamptz | |
+| arrival_delay_min | int | |
+| departure_delay_min | int | |
+| planned_platform | text | |
+| actual_platform | text | |
+| source | text | Which API provided this stop |
+| cancelled | boolean | |
+
+### Journey Store API
+
+```typescript
+import { 
+  storeJourney, 
+  findJourneyByKey, 
+  getJourneyById,
+  updateJourneyRealtime 
+} from './services/journeyStore';
+
+// Store a journey
+const stored = await storeJourney(journeyInput);
+
+// Find by unique key
+const journey = await findJourneyByKey("ICE123_amsterdam-centraal_2026-01-18T10:31:00");
+
+// Get by database ID
+const journey = await getJourneyById("uuid-here");
+
+// Update realtime data
+await updateJourneyRealtime(id, {
+  status: "delayed",
+  stops: [{ sequence: 0, departureDelayMin: 5, actualPlatform: "7" }]
+});
+```
+
+---
+
+## International API (Orchestration)
+
+The main entry point for international journey search:
+
+```typescript
+import { 
+  searchStations, 
+  searchJourneys, 
+  getJourneyDetails 
+} from './services/internationalApi';
+
+// Search stations across all providers
+const stations = await searchStations("amsterdam");
+
+// Search journeys (queries relevant providers, merges, stores)
+const journeys = await searchJourneys(fromStation, toStation, dateTime);
+
+// Get journey details with optional refresh
+const details = await getJourneyDetails(journeyId, refresh: true);
+```
+
+### Journey Merging
+
+When the same train is found by multiple providers:
+
+1. **Match by**: `trainType + trainNumber + departure time (±5 min)`
+2. **Field priority**:
+   - Origin country API → departure info
+   - Destination country API → arrival info
+   - More stops → intermediate stations
+   - Latest data → realtime delays/platforms
+
+---
+
+## Environment Variables
 
 ```bash
 # .env.local
@@ -289,31 +345,60 @@ export const someFunction = async (params): Promise<ReturnType> => {
 # NS API (Netherlands)
 VITE_NS_API_KEY=your_ns_api_key
 
-# DB API (Germany)
+# DB API (Germany)  
 VITE_DB_CLIENT_ID=your_db_client_id
 VITE_DB_API_KEY=your_db_api_key
 
-# SNCF API (France) - Phase 3
-VITE_SNCF_API_KEY=your_sncf_api_key
-
 # Supabase
-VITE_SUPABASE_URL=your_supabase_url
+VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+
+# Future
+# VITE_SNCF_API_KEY=your_sncf_api_key
 ```
 
 ---
 
-## Cross-Border Journey Logic
+## Type Reference
 
-When combining data from multiple APIs:
+### Core Types
 
-1. **Match trains by:** train number + departure time (±5 min tolerance)
-2. **Authority by country:**
-   - NS authoritative for Dutch stations
-   - DB authoritative for German stations
-   - SNCF authoritative for French stations
-3. **Store raw responses** in `rawData` field for debugging
-4. **Prefer most complete data** when merging conflicting info
+```typescript
+// Provider identifiers
+type ProviderID = "NS" | "DB" | "SNCF" | "OBB" | "SBB";
+type CountryCode = "NL" | "DE" | "FR" | "AT" | "CH" | "BE";
+type ApiSource = "NS" | "DB" | "SNCF" | "merged";
+
+// Station from registry
+interface UnifiedStation {
+  id: string;
+  displayName: string;
+  country: CountryCode;
+  coordinates?: { lat: number; lng: number };
+  providerIds: Partial<Record<ProviderID, string>>;
+}
+
+// Journey stored in database
+interface StoredJourney {
+  id: string;
+  journeyKey: string;
+  trainNumber: string;
+  trainType: string;
+  operator: string;
+  originStationId: string;
+  originStationName: string;
+  destinationStationId: string;
+  destinationStationName: string;
+  scheduledDeparture: string;
+  scheduledArrival?: string;
+  durationMinutes: number;
+  status: JourneyStatus;
+  sources: ApiSource[];
+  stops: StoredJourneyStop[];
+  createdAt: string;
+  updatedAt: string;
+}
+```
 
 ---
 
@@ -321,24 +406,27 @@ When combining data from multiple APIs:
 
 ### Search for stations
 ```typescript
-import { searchStations } from './services/nsApi';   // Dutch
-import { searchStations } from './services/dbApi';   // German
+import { searchStations } from './services/internationalApi';
+const stations = await searchStations("frankfurt");
 ```
 
-### Get departures at a station
+### Search for journeys
 ```typescript
-import { getDepartures } from './services/dbApi';
-const departures = await getDepartures("8000105", "2026-01-17T14:00:00");
+import { searchStations, searchJourneys } from './services/internationalApi';
+
+const [from] = await searchStations("Amsterdam");
+const [to] = await searchStations("Frankfurt");
+const journeys = await searchJourneys(from, to, new Date().toISOString());
 ```
 
-### Find a specific train
+### Get journey details with refresh
 ```typescript
-import { findJourneys } from './services/dbApi';
-const trains = await findJourneys("123", "2026-01-17T14:00:00"); // ICE 123
+import { getJourneyDetails } from './services/internationalApi';
+const details = await getJourneyDetails(journeyId, true); // true = refresh from APIs
 ```
 
-### Get journey details
-```typescript
-import { getJourneyDetails } from './services/dbApi';
-const journey = await getJourneyDetails("journey-id-from-search");
-```
+---
+
+## Adding New Providers
+
+See `docs/adding-providers.md` for a step-by-step guide to implement SNCF, OBB, SBB, or other European rail APIs.
