@@ -595,15 +595,17 @@ export const findJourneys = async (
   transportTypes?: string[]
 ): Promise<Journey[]> => {
   try {
-    const url = new URL(`${JOURNEYS_BASE_URL}/find`);
-    url.searchParams.set("journeyNumber", trainNumber);
-    url.searchParams.set("date", dateTime.split("T")[0]);
+    const params = new URLSearchParams();
+    params.set("journeyNumber", trainNumber);
+    params.set("date", dateTime.split("T")[0]);
 
     if (transportTypes && transportTypes.length > 0) {
-      url.searchParams.set("transportTypes", transportTypes.join(","));
+      params.set("transportTypes", transportTypes.join(","));
     }
 
-    const { data } = await fetchJson<DBJourneysResponse>(url.toString(), {
+    const url = `${JOURNEYS_BASE_URL}/find?${params.toString()}`;
+
+    const { data } = await fetchJson<DBJourneysResponse>(url, {
       journeyNumber: trainNumber,
       date: dateTime,
     });
@@ -623,9 +625,9 @@ export const findJourneys = async (
  */
 export const getJourneyDetails = async (journeyId: string): Promise<Journey | null> => {
   try {
-    const url = new URL(`${JOURNEYS_BASE_URL}/${encodeURIComponent(journeyId)}`);
+    const url = `${JOURNEYS_BASE_URL}/${encodeURIComponent(journeyId)}`;
 
-    const { data } = await fetchJson<DBJourneyDetailsResponse>(url.toString(), {
+    const { data } = await fetchJson<DBJourneyDetailsResponse>(url, {
       journeyId,
     });
 
@@ -752,3 +754,81 @@ export const searchJourneys = async (
  * @param journeyId - The journey ID
  */
 export const getJourneyStatus = getJourneyDetails;
+
+/**
+ * Resolve journey details by train number and approximate departure time.
+ * Uses RIS::Journeys findJourneys() then matches best candidate by time.
+ * @param trainNumber - Train number (e.g., "123" for ICE 123)
+ * @param trainType - Train type (e.g., "ICE", "IC", "RE")
+ * @param departureTime - ISO datetime string for expected departure
+ * @param originEva - Optional origin station EVA number for better matching
+ * @returns Journey with full stops, or null if not found
+ */
+export const resolveJourneyDetail = async (
+  trainNumber: string,
+  trainType: string,
+  departureTime: string,
+  originEva?: string
+): Promise<Journey | null> => {
+  try {
+    // Find journeys by train number
+    const candidates = await findJourneys(trainNumber, departureTime, [trainType]);
+
+    if (candidates.length === 0) {
+      // Try without transport type filter as a fallback
+      const fallbackCandidates = await findJourneys(trainNumber, departureTime);
+      if (fallbackCandidates.length === 0) {
+        console.warn(`[DB API] resolveJourneyDetail: No journeys found for ${trainType} ${trainNumber}`);
+        return null;
+      }
+      candidates.push(...fallbackCandidates);
+    }
+
+    const targetTime = new Date(departureTime).getTime();
+    const TEN_MINUTES_MS = 10 * 60 * 1000;
+
+    // Score candidates by time proximity and origin match
+    let bestCandidate = candidates[0];
+    let bestScore = Infinity;
+
+    for (const candidate of candidates) {
+      const candidateDepTime = candidate.departure.scheduledDeparture;
+      if (!candidateDepTime) continue;
+
+      const candidateTime = new Date(candidateDepTime).getTime();
+      const timeDiff = Math.abs(candidateTime - targetTime);
+
+      // Origin EVA match gives priority
+      let score = timeDiff;
+      if (originEva && candidate.departure.station.code === originEva) {
+        score -= TEN_MINUTES_MS; // Boost score for origin match
+      }
+
+      if (score < bestScore) {
+        bestScore = score;
+        bestCandidate = candidate;
+      }
+    }
+
+    // If best match is too far off (>10 min), still return it but log warning
+    if (bestScore > TEN_MINUTES_MS) {
+      console.warn(
+        `[DB API] resolveJourneyDetail: Best match for ${trainType} ${trainNumber} is ${Math.round(bestScore / 60000)} min off`
+      );
+    }
+
+    // Now fetch full journey details using the journeyID
+    if (bestCandidate.id) {
+      const details = await getJourneyDetails(bestCandidate.id);
+      if (details) {
+        return details;
+      }
+    }
+
+    // Fallback to the candidate itself if details fetch fails
+    return bestCandidate;
+  } catch (error) {
+    console.error(`[DB API][${getTimestamp()}] resolveJourneyDetail error`, error);
+    return null;
+  }
+};

@@ -2,7 +2,11 @@ import { useState, useEffect, useRef } from "react";
 import * as nsApi from "../services/nsApi";
 import * as dbApi from "../services/dbApi";
 import * as internationalApi from "../services/internationalApi";
-import type { Journey, Station, MergedJourney, MergedStation, MergedJourneyStop } from "../types/train";
+import type { Journey, Station, MergedJourneyStop, StoredJourney } from "../types/train";
+import type { UnifiedStation } from "../data/stationRegistry";
+import { DBJourneySearchPanel } from "../components/DBJourneySearchPanel";
+import { DBJourneyResults } from "../components/DBJourneyResults";
+import { DBJourneyDetail } from "../components/DBJourneyDetail";
 
 type TabId = "ns" | "db" | "international";
 
@@ -310,7 +314,7 @@ function NSApiTest() {
 
 type StationSearchState = {
   query: string;
-  results: MergedStation[];
+  results: UnifiedStation[];
   loading: boolean;
   showDropdown: boolean;
 };
@@ -329,14 +333,14 @@ function InternationalApiTest() {
     loading: false,
     showDropdown: false,
   });
-  const [selectedFrom, setSelectedFrom] = useState<MergedStation | null>(null);
-  const [selectedTo, setSelectedTo] = useState<MergedStation | null>(null);
+  const [selectedFrom, setSelectedFrom] = useState<UnifiedStation | null>(null);
+  const [selectedTo, setSelectedTo] = useState<UnifiedStation | null>(null);
 
   // Journey search state
   const [dateTime, setDateTime] = useState(
     new Date().toISOString().slice(0, 16)
   );
-  const [journeyResult, setJourneyResult] = useState<TestResult<MergedJourney[]>>({
+  const [journeyResult, setJourneyResult] = useState<TestResult<StoredJourney[]>>({
     data: null,
     error: null,
     loading: false,
@@ -345,8 +349,8 @@ function InternationalApiTest() {
   });
 
   // Journey detail view
-  const [selectedJourney, setSelectedJourney] = useState<MergedJourney | null>(null);
-  const [journeyDetails, setJourneyDetails] = useState<MergedJourney | null>(null);
+  const [selectedJourney, setSelectedJourney] = useState<StoredJourney | null>(null);
+  const [journeyDetails, setJourneyDetails] = useState<StoredJourney | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
 
   // Refs for dropdown click-outside handling
@@ -414,20 +418,20 @@ function InternationalApiTest() {
     }, 300);
   };
 
-  const selectFromStation = (station: MergedStation) => {
+  const selectFromStation = (station: UnifiedStation) => {
     setSelectedFrom(station);
     setFromSearch({
-      query: station.name,
+      query: station.displayName,
       results: [],
       loading: false,
       showDropdown: false,
     });
   };
 
-  const selectToStation = (station: MergedStation) => {
+  const selectToStation = (station: UnifiedStation) => {
     setSelectedTo(station);
     setToSearch({
-      query: station.name,
+      query: station.displayName,
       results: [],
       loading: false,
       showDropdown: false,
@@ -478,7 +482,7 @@ function InternationalApiTest() {
 
     const ts = getTimestamp();
     console.log(
-      `[APITestPage][${ts}] International Journey Search: ${from.name} → ${to.name} @ ${dateTime}`
+      `[APITestPage][${ts}] International Journey Search: ${from.displayName} → ${to.displayName} @ ${dateTime}`
     );
 
     try {
@@ -509,13 +513,13 @@ function InternationalApiTest() {
   };
 
   // View journey details
-  const handleSelectJourney = async (journey: MergedJourney) => {
+  const handleSelectJourney = async (journey: StoredJourney) => {
     setSelectedJourney(journey);
     setDetailsLoading(true);
     setJourneyDetails(null);
 
     try {
-      const details = await internationalApi.getJourneyDetails(journey);
+      const details = await internationalApi.getJourneyDetails(journey.id, true);
       setJourneyDetails(details);
     } catch (err) {
       console.error("Failed to get journey details:", err);
@@ -568,13 +572,13 @@ function InternationalApiTest() {
               <ul className="absolute z-10 mt-1 max-h-48 w-full overflow-auto rounded border bg-white shadow-lg">
                 {fromSearch.results.slice(0, 10).map((station, idx) => (
                   <li
-                    key={`${station.code}-${idx}`}
+                    key={`${station.id}-${idx}`}
                     onClick={() => selectFromStation(station)}
                     className="cursor-pointer px-3 py-2 text-sm hover:bg-blue-50"
                   >
-                    <span className="font-medium">{station.name}</span>
+                    <span className="font-medium">{station.displayName}</span>
                     <span className="ml-2 text-xs text-gray-500">
-                      {station.country} ({station.authoritative})
+                      {station.country}
                     </span>
                   </li>
                 ))}
@@ -609,13 +613,13 @@ function InternationalApiTest() {
               <ul className="absolute z-10 mt-1 max-h-48 w-full overflow-auto rounded border bg-white shadow-lg">
                 {toSearch.results.slice(0, 10).map((station, idx) => (
                   <li
-                    key={`${station.code}-${idx}`}
+                    key={`${station.id}-${idx}`}
                     onClick={() => selectToStation(station)}
                     className="cursor-pointer px-3 py-2 text-sm hover:bg-blue-50"
                   >
-                    <span className="font-medium">{station.name}</span>
+                    <span className="font-medium">{station.displayName}</span>
                     <span className="ml-2 text-xs text-gray-500">
-                      {station.country} ({station.authoritative})
+                      {station.country}
                     </span>
                   </li>
                 ))}
@@ -722,93 +726,89 @@ function InternationalJourneyList({
   journeys,
   onSelect,
 }: {
-  journeys: MergedJourney[];
-  onSelect: (journey: MergedJourney) => void;
+  journeys: StoredJourney[];
+  onSelect: (journey: StoredJourney) => void;
 }) {
   return (
     <ul className="space-y-2">
-      {journeys.map((journey, idx) => (
-        <li
-          key={`${journey.deduplicationKey}-${idx}`}
-          onClick={() => onSelect(journey)}
-          className="cursor-pointer rounded border bg-gray-50 p-3 transition-colors hover:border-purple-300 hover:bg-purple-50"
-        >
-          <div className="flex items-start justify-between">
-            <div>
-              <span className="font-medium">
-                {journey.trainType} {journey.trainNumber}
-              </span>
-              <span className="ml-2 text-sm text-gray-500">{journey.operator}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span
-                className={`rounded px-2 py-0.5 text-xs ${
-                  journey.apiSource === "merged"
-                    ? "bg-purple-100 text-purple-700"
-                    : journey.apiSource === "NS"
-                      ? "bg-blue-100 text-blue-700"
-                      : "bg-green-100 text-green-700"
-                }`}
-              >
-                {journey.apiSource}
-              </span>
-              <span
-                className={`rounded px-2 py-0.5 text-xs ${
-                  journey.status === "cancelled"
-                    ? "bg-red-200 text-red-800"
-                    : journey.status === "delayed"
-                      ? "bg-yellow-200 text-yellow-800"
-                      : "bg-green-200 text-green-800"
-                }`}
-              >
-                {journey.status}
-              </span>
-            </div>
-          </div>
-
-          <div className="mt-2 flex items-center text-sm">
-            <div className="flex-1">
-              <div className="font-medium">{journey.departure.station.name}</div>
-              <div className="text-gray-500">
-                {formatTime(journey.departure.scheduledDeparture)}
-                {journey.departure.platform && (
-                  <span className="ml-2">Platform {journey.departure.platform}</span>
-                )}
+      {journeys.map((journey, idx) => {
+        const originStop = journey.stops[0];
+        const destStop = journey.stops[journey.stops.length - 1];
+        const sourceLabel = journey.sources.length > 1 ? "merged" : journey.sources[0] ?? "unknown";
+        
+        return (
+          <li
+            key={`${journey.journeyKey}-${idx}`}
+            onClick={() => onSelect(journey)}
+            className="cursor-pointer rounded border bg-gray-50 p-3 transition-colors hover:border-purple-300 hover:bg-purple-50"
+          >
+            <div className="flex items-start justify-between">
+              <div>
+                <span className="font-medium">
+                  {journey.trainType} {journey.trainNumber}
+                </span>
+                <span className="ml-2 text-sm text-gray-500">{journey.operator}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span
+                  className={`rounded px-2 py-0.5 text-xs ${
+                    sourceLabel === "merged"
+                      ? "bg-purple-100 text-purple-700"
+                      : sourceLabel === "NS"
+                        ? "bg-blue-100 text-blue-700"
+                        : "bg-green-100 text-green-700"
+                  }`}
+                >
+                  {sourceLabel}
+                </span>
+                <span
+                  className={`rounded px-2 py-0.5 text-xs ${
+                    journey.status === "cancelled"
+                      ? "bg-red-200 text-red-800"
+                      : journey.status === "delayed"
+                        ? "bg-yellow-200 text-yellow-800"
+                        : "bg-green-200 text-green-800"
+                  }`}
+                >
+                  {journey.status}
+                </span>
               </div>
             </div>
-            <div className="px-4 text-center text-gray-400">
-              <div className="text-xs">{journey.duration} min</div>
-              <div className="text-lg">→</div>
-            </div>
-            <div className="flex-1 text-right">
-              <div className="font-medium">{journey.arrival.station.name}</div>
-              <div className="text-gray-500">
-                {formatTime(journey.arrival.scheduledArrival)}
-                {journey.arrival.platform && (
-                  <span className="ml-2">Platform {journey.arrival.platform}</span>
-                )}
+
+            <div className="mt-2 flex items-center text-sm">
+              <div className="flex-1">
+                <div className="font-medium">{journey.originStationName}</div>
+                <div className="text-gray-500">
+                  {formatTime(journey.scheduledDeparture)}
+                  {originStop?.plannedPlatform && (
+                    <span className="ml-2">Platform {originStop.actualPlatform ?? originStop.plannedPlatform}</span>
+                  )}
+                </div>
+              </div>
+              <div className="px-4 text-center text-gray-400">
+                <div className="text-xs">{journey.durationMinutes} min</div>
+                <div className="text-lg">→</div>
+              </div>
+              <div className="flex-1 text-right">
+                <div className="font-medium">{journey.destinationStationName}</div>
+                <div className="text-gray-500">
+                  {formatTime(journey.scheduledArrival)}
+                  {destStop?.plannedPlatform && (
+                    <span className="ml-2">Platform {destStop.actualPlatform ?? destStop.plannedPlatform}</span>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
-
-          {journey.transfers > 0 && (
-            <div className="mt-2 text-xs text-orange-600">
-              {journey.transfers} transfer{journey.transfers !== 1 ? "s" : ""}
-            </div>
-          )}
-        </li>
-      ))}
+          </li>
+        );
+      })}
     </ul>
   );
 }
 
 // Journey detail view with all stops
-function JourneyDetailView({ journey }: { journey: MergedJourney }) {
-  // Get stops from the journey - prefer legs[0].stops if available
-  const stops: MergedJourneyStop[] =
-    journey.legs[0]?.stops?.length > 0
-      ? journey.legs[0].stops
-      : (journey.stops as MergedJourneyStop[]) ?? [];
+function JourneyDetailView({ journey }: { journey: StoredJourney }) {
+  const stops = journey.stops ?? [];
 
   return (
     <div>
@@ -827,7 +827,7 @@ function JourneyDetailView({ journey }: { journey: MergedJourney }) {
           </div>
           <div>
             <div className="text-xs text-gray-500">Duration</div>
-            <div className="font-medium">{journey.duration} minutes</div>
+            <div className="font-medium">{journey.durationMinutes} minutes</div>
           </div>
           <div>
             <div className="text-xs text-gray-500">Status</div>
@@ -845,10 +845,7 @@ function JourneyDetailView({ journey }: { journey: MergedJourney }) {
           </div>
         </div>
         <div className="mt-2 text-xs text-gray-500">
-          Data sources: {journey.nsJourney ? "NS" : ""}{" "}
-          {journey.nsJourney && journey.dbJourney ? "+ " : ""}
-          {journey.dbJourney ? "DB" : ""}
-          {!journey.nsJourney && !journey.dbJourney ? journey.apiSource : ""}
+          Data sources: {journey.sources.join(" + ")}
         </div>
       </div>
 
@@ -857,7 +854,7 @@ function JourneyDetailView({ journey }: { journey: MergedJourney }) {
         <h4 className="mb-2 text-sm font-semibold">Route & Stops</h4>
         {stops.length === 0 ? (
           <p className="text-sm text-gray-500">
-            No detailed stop information available. Showing departure and arrival only.
+            No detailed stop information available.
           </p>
         ) : null}
       </div>
@@ -866,35 +863,15 @@ function JourneyDetailView({ journey }: { journey: MergedJourney }) {
         {/* Timeline line */}
         <div className="absolute left-4 top-2 h-[calc(100%-16px)] w-0.5 bg-gray-200" />
 
-        {/* Departure */}
-        <StopItem
-          stop={journey.departure as MergedJourneyStop}
-          type="departure"
-          isFirst={true}
-        />
-
-        {/* Intermediate stops */}
-        {stops
-          .filter(
-            (stop) =>
-              stop.station.name !== journey.departure.station.name &&
-              stop.station.name !== journey.arrival.station.name
-          )
-          .map((stop, idx) => (
-            <StopItem
-              key={`${stop.station.code || stop.station.name}-${idx}`}
-              stop={stop}
-              type="intermediate"
-              isFirst={false}
-            />
-          ))}
-
-        {/* Arrival */}
-        <StopItem
-          stop={journey.arrival as MergedJourneyStop}
-          type="arrival"
-          isFirst={false}
-        />
+        {/* All stops in sequence */}
+        {stops.map((stop, idx) => (
+          <StoredStopItem
+            key={`${stop.stationId}-${idx}`}
+            stop={stop}
+            type={idx === 0 ? "departure" : idx === stops.length - 1 ? "arrival" : "intermediate"}
+            isFirst={idx === 0}
+          />
+        ))}
       </div>
     </div>
   );
@@ -974,25 +951,86 @@ function StopItem({
   );
 }
 
+// Individual stop in the timeline for StoredJourneyStop
+function StoredStopItem({
+  stop,
+  type,
+  isFirst,
+}: {
+  stop: import("../types/train").StoredJourneyStop;
+  type: "departure" | "intermediate" | "arrival";
+  isFirst: boolean;
+}) {
+  const time =
+    type === "departure" ? stop.scheduledDeparture : stop.scheduledArrival;
+  const delay =
+    type === "departure" ? stop.departureDelayMin : stop.arrivalDelayMin;
+
+  return (
+    <div className={`relative flex items-start gap-4 ${isFirst ? "" : "mt-3"}`}>
+      {/* Timeline dot */}
+      <div
+        className={`relative z-10 flex h-8 w-8 items-center justify-center rounded-full ${
+          type === "departure"
+            ? "bg-green-500 text-white"
+            : type === "arrival"
+              ? "bg-red-500 text-white"
+              : "bg-white border-2 border-gray-300"
+        }`}
+      >
+        {type === "departure" && "↑"}
+        {type === "arrival" && "↓"}
+        {type === "intermediate" && "•"}
+      </div>
+
+      {/* Stop info */}
+      <div className="flex-1 pb-2">
+        <div className="flex items-start justify-between">
+          <div>
+            <div className="font-medium">{stop.stationName}</div>
+            <div className="text-xs text-gray-500">
+              {stop.country}
+              {stop.source && ` • via ${stop.source} API`}
+            </div>
+          </div>
+          <div className="text-right">
+            <div className="font-medium">{formatTime(time)}</div>
+            {delay && delay > 0 && (
+              <div className="text-xs text-red-600">+{delay} min</div>
+            )}
+          </div>
+        </div>
+
+        {/* Platform info */}
+        {(stop.plannedPlatform || stop.actualPlatform) && (
+          <div className="mt-1 inline-block rounded bg-blue-100 px-2 py-0.5 text-xs text-blue-700">
+            Platform {stop.actualPlatform ?? stop.plannedPlatform}
+            {stop.plannedPlatform &&
+              stop.actualPlatform &&
+              stop.plannedPlatform !== stop.actualPlatform && (
+                <span className="ml-1 text-orange-600">
+                  (was {stop.plannedPlatform})
+                </span>
+              )}
+          </div>
+        )}
+
+        {stop.cancelled && (
+          <div className="mt-1 inline-block rounded bg-red-100 px-2 py-0.5 text-xs text-red-700">
+            Cancelled
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // =============================================================================
-// DB API Test Component (existing)
+// DB API Test Component (enhanced with autocomplete + detail view)
 // =============================================================================
 
 function DBApiTest() {
-  const [stationQuery, setStationQuery] = useState("Frankfurt");
-  const [stationResult, setStationResult] = useState<TestResult<Station[]>>({
-    data: null,
-    error: null,
-    loading: false,
-    timestamp: null,
-    rawJson: null,
-  });
-
-  const [fromStation, setFromStation] = useState("8000105"); // Frankfurt Hbf
-  const [toStation, setToStation] = useState("8000261"); // München Hbf
-  const [dateTime, setDateTime] = useState(
-    new Date().toISOString().slice(0, 16)
-  );
+  // Journey search state
   const [journeyResult, setJourneyResult] = useState<TestResult<Journey[]>>({
     data: null,
     error: null,
@@ -1001,41 +1039,13 @@ function DBApiTest() {
     rawJson: null,
   });
 
-  const handleSearchStations = async () => {
-    setStationResult({
-      data: null,
-      error: null,
-      loading: true,
-      timestamp: null,
-      rawJson: null,
-    });
-    const ts = getTimestamp();
-    console.log(`[APITestPage][${ts}] DB Station Search: "${stationQuery}"`);
+  // Journey detail state
+  const [selectedJourney, setSelectedJourney] = useState<Journey | null>(null);
+  const [detailedJourney, setDetailedJourney] = useState<Journey | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
 
-    try {
-      const stations = await dbApi.searchStations(stationQuery);
-      console.log(`[APITestPage][${ts}] DB Stations Result:`, stations);
-      setStationResult({
-        data: stations,
-        error: null,
-        loading: false,
-        timestamp: ts,
-        rawJson: JSON.stringify(stations, null, 2),
-      });
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : "Unknown error";
-      console.error(`[APITestPage][${ts}] DB Stations Error:`, err);
-      setStationResult({
-        data: null,
-        error: errorMsg,
-        loading: false,
-        timestamp: ts,
-        rawJson: null,
-      });
-    }
-  };
-
-  const handleSearchJourneys = async () => {
+  // Search handler
+  const handleSearch = async (fromEva: string, toEva: string, dateTime: string) => {
     setJourneyResult({
       data: null,
       error: null,
@@ -1043,16 +1053,17 @@ function DBApiTest() {
       timestamp: null,
       rawJson: null,
     });
+    setSelectedJourney(null);
+    setDetailedJourney(null);
+
     const ts = getTimestamp();
-    console.log(
-      `[APITestPage][${ts}] DB Journey Search: ${fromStation} → ${toStation} @ ${dateTime}`
-    );
+    console.log(`[APITestPage][${ts}] DB Journey Search: ${fromEva} → ${toEva} @ ${dateTime}`);
 
     try {
       const journeys = await dbApi.searchJourneys({
-        from: fromStation,
-        to: toStation,
-        dateTime: new Date(dateTime).toISOString(),
+        from: fromEva,
+        to: toEva,
+        dateTime,
       });
       console.log(`[APITestPage][${ts}] DB Journeys Result:`, journeys);
       setJourneyResult({
@@ -1075,86 +1086,76 @@ function DBApiTest() {
     }
   };
 
-  return (
-    <div className="space-y-8">
-      {/* Station Search */}
-      <section className="rounded border bg-white p-4">
-        <h3 className="mb-3 font-semibold">Station Search</h3>
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={stationQuery}
-            onChange={(e) => setStationQuery(e.target.value)}
-            placeholder="Station name..."
-            className="flex-1 rounded border px-3 py-2 text-sm"
-          />
-          <button
-            onClick={handleSearchStations}
-            disabled={stationResult.loading}
-            className="rounded bg-green-600 px-4 py-2 text-sm text-white hover:bg-green-700 disabled:opacity-50"
-          >
-            {stationResult.loading ? <LoadingSpinner /> : "Search DB Stations"}
-          </button>
-        </div>
-        {stationResult.timestamp && (
-          <p className="mt-2 text-xs text-gray-400">
-            Tested at: {stationResult.timestamp}
-          </p>
-        )}
-        <div className="mt-3">
-          {stationResult.error && <ErrorDisplay error={stationResult.error} />}
-          {stationResult.data && <StationList stations={stationResult.data} />}
-        </div>
-        <CollapsibleJson json={stationResult.rawJson} />
-      </section>
+  // Select journey and fetch details
+  const handleSelectJourney = async (journey: Journey) => {
+    setSelectedJourney(journey);
+    setDetailedJourney(null);
+    setDetailLoading(true);
 
-      {/* Journey Search */}
-      <section className="rounded border bg-white p-4">
-        <h3 className="mb-3 font-semibold">Journey Search</h3>
-        <p className="mb-2 text-xs text-gray-500">
-          Tip: Use station IDs (e.g., 8000105 = Frankfurt Hbf, 8000261 = München
-          Hbf, 8011160 = Berlin Hbf)
-        </p>
-        <div className="grid gap-2 sm:grid-cols-3">
-          <input
-            type="text"
-            value={fromStation}
-            onChange={(e) => setFromStation(e.target.value)}
-            placeholder="From station ID..."
-            className="rounded border px-3 py-2 text-sm"
-          />
-          <input
-            type="text"
-            value={toStation}
-            onChange={(e) => setToStation(e.target.value)}
-            placeholder="To station ID..."
-            className="rounded border px-3 py-2 text-sm"
-          />
-          <input
-            type="datetime-local"
-            value={dateTime}
-            onChange={(e) => setDateTime(e.target.value)}
-            className="rounded border px-3 py-2 text-sm"
-          />
+    const ts = getTimestamp();
+    console.log(
+      `[APITestPage][${ts}] Fetching DB journey details for ${journey.trainType} ${journey.trainNumber}`
+    );
+
+    try {
+      const details = await dbApi.resolveJourneyDetail(
+        journey.trainNumber,
+        journey.trainType,
+        journey.departure.scheduledDeparture ?? new Date().toISOString(),
+        journey.departure.station.uicCode ?? journey.departure.station.code
+      );
+      console.log(`[APITestPage][${ts}] DB Journey Details:`, details);
+      setDetailedJourney(details);
+    } catch (err) {
+      console.error(`[APITestPage][${ts}] DB Journey Details Error:`, err);
+      // Still show the original journey if details fetch fails
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const handleBackToResults = () => {
+    setSelectedJourney(null);
+    setDetailedJourney(null);
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Search Panel */}
+      <DBJourneySearchPanel onSearch={handleSearch} loading={journeyResult.loading} />
+
+      {/* Error Display */}
+      {journeyResult.error && (
+        <div className="rounded bg-red-100 p-3 text-sm text-red-700">
+          {journeyResult.error}
         </div>
-        <button
-          onClick={handleSearchJourneys}
-          disabled={journeyResult.loading}
-          className="mt-2 rounded bg-green-600 px-4 py-2 text-sm text-white hover:bg-green-700 disabled:opacity-50"
-        >
-          {journeyResult.loading ? <LoadingSpinner /> : "Search DB Journeys"}
-        </button>
-        {journeyResult.timestamp && (
-          <p className="mt-2 text-xs text-gray-400">
-            Tested at: {journeyResult.timestamp}
-          </p>
-        )}
-        <div className="mt-3">
-          {journeyResult.error && <ErrorDisplay error={journeyResult.error} />}
-          {journeyResult.data && <JourneyList journeys={journeyResult.data} />}
+      )}
+
+      {/* Journey Results or Detail View */}
+      {selectedJourney ? (
+        <DBJourneyDetail
+          journey={selectedJourney}
+          detailedJourney={detailedJourney}
+          loading={detailLoading}
+          onBack={handleBackToResults}
+        />
+      ) : (
+        journeyResult.data &&
+        journeyResult.data.length > 0 && (
+          <DBJourneyResults
+            journeys={journeyResult.data}
+            onSelect={handleSelectJourney}
+            rawJson={journeyResult.rawJson}
+            timestamp={journeyResult.timestamp}
+          />
+        )
+      )}
+
+      {journeyResult.data && journeyResult.data.length === 0 && !selectedJourney && (
+        <div className="rounded bg-yellow-50 p-4 text-sm text-yellow-800">
+          No journeys found for this route. Try adjusting the date/time or station names.
         </div>
-        <CollapsibleJson json={journeyResult.rawJson} />
-      </section>
+      )}
     </div>
   );
 }

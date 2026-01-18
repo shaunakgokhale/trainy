@@ -1,162 +1,433 @@
-import * as nsApi from "./nsApi";
-import * as dbApi from "./dbApi";
-import type {
-  Journey,
-  JourneyStop,
-  MergedJourney,
-  MergedJourneyLeg,
-  MergedJourneyStop,
-  MergedStation,
-  Station,
-} from "../types/train";
-
 // =============================================================================
 // International API Service
 // =============================================================================
+// Orchestrates multiple train API providers to enable cross-border journey
+// search and unified journey storage.
 //
-// Orchestrates NS (Dutch) and DB (German) APIs to provide cross-border
-// journey search. For Amsterdam to Frankfurt, this means:
-// - NS API can find journeys from Amsterdam to German border/major stations
-// - DB API can find journeys from Dutch border/major stations to Frankfurt
-// - This service combines and deduplicates results
-//
-// Key insight: NS API supports searching to German stations directly,
-// since ICE trains run Amsterdam-Frankfurt. DB requires station EVA numbers.
+// Architecture:
+// - Layer 1 (Providers): nsProvider, dbProvider handle API communication
+// - Layer 2 (Registry): stationRegistry provides unified station identifiers
+// - Layer 3 (This file): Orchestrates providers and manages persistence
+// =============================================================================
+
+import {
+  getProviderForCountry,
+  getActiveProviders,
+  getProvider,
+  type TrainProvider,
+  type ProviderID,
+  type CountryCode,
+} from "./providers";
+import {
+  findStationsByName,
+  getStationById,
+  type UnifiedStation,
+} from "../data/stationRegistry";
+import { findStationIdByAlias } from "../data/stationAliases";
+import {
+  storeJourneys,
+  getJourneyById,
+  updateJourneyRealtime,
+} from "./journeyStore";
+import type {
+  Journey,
+  JourneyStop,
+  StoredJourney,
+  StoredJourneyInput,
+  StoredJourneyStop,
+  ApiSource,
+  JourneyStatus,
+} from "../types/train";
+import { generateJourneyKey } from "../types/train";
+
+// =============================================================================
+// Logging Helpers
 // =============================================================================
 
 const getTimestamp = () => new Date().toISOString();
 
 const logInfo = (message: string, data?: unknown) => {
-  console.log(`[International API][${getTimestamp()}] ${message}`, data ?? "");
+  console.log(`[InternationalAPI][${getTimestamp()}] ${message}`, data ?? "");
 };
 
 const logError = (message: string, error: unknown) => {
-  console.error(`[International API][${getTimestamp()}] ${message}`, error);
+  console.error(`[InternationalAPI][${getTimestamp()}] ${message}`, error);
 };
 
 // =============================================================================
-// Station Search - Combines NS and DB results
+// Station Search
 // =============================================================================
 
 /**
- * Determine which country's API should be authoritative for a station
+ * Search for stations across all providers and the registry.
+ * Combines results with registry data taking priority.
  */
-const getAuthoritativeSource = (station: Station): "NS" | "DB" => {
-  const country = station.country?.toUpperCase();
-  if (country === "NL" || country === "NETHERLANDS" || country === "B" || country === "BE") {
-    return "NS";
-  }
-  if (country === "DE" || country === "GERMANY" || country === "D") {
-    return "DB";
-  }
-  // Default to NS for unknown (they have good international coverage)
-  return "NS";
-};
-
-/**
- * Search stations from both NS and DB APIs
- * Returns merged results with duplicates removed
- */
-export const searchStations = async (query: string): Promise<MergedStation[]> => {
+export async function searchStations(query: string): Promise<UnifiedStation[]> {
   if (!query || query.length < 2) {
     return [];
   }
 
   logInfo(`Searching stations: "${query}"`);
 
-  const results: MergedStation[] = [];
-  const seenNames = new Set<string>();
+  const results: UnifiedStation[] = [];
+  const seenIds = new Set<string>();
 
-  // Check for known stations first (provides faster results for common routes)
-  const knownStation = findKnownStation(query);
-  if (knownStation) {
-    logInfo(`Found known station: ${knownStation.name}`);
-    seenNames.add(knownStation.name.toLowerCase().trim());
-    results.push(knownStation);
-  }
-
-  // Search both APIs in parallel
-  const [nsResult, dbResult] = await Promise.allSettled([
-    nsApi.searchStations(query),
-    dbApi.searchStations(query),
-  ]);
-
-  // Process NS results first (higher priority for Dutch stations)
-  if (nsResult.status === "fulfilled") {
-    logInfo(`NS returned ${nsResult.value.length} stations`);
-    for (const station of nsResult.value) {
-      const normalizedName = station.name.toLowerCase().trim();
-      if (!seenNames.has(normalizedName)) {
-        seenNames.add(normalizedName);
-        results.push({
-          ...station,
-          nsStation: station,
-          authoritative: getAuthoritativeSource(station),
-        });
-      }
+  // 1. Check aliases first (instant match for common names)
+  const aliasMatch = findStationIdByAlias(query);
+  if (aliasMatch) {
+    const station = getStationById(aliasMatch);
+    if (station) {
+      logInfo(`Found alias match: ${station.displayName}`);
+      seenIds.add(station.id);
+      results.push(station);
     }
-  } else {
-    logError("NS station search failed", nsResult.reason);
   }
 
-  // Process DB results
-  if (dbResult.status === "fulfilled") {
-    logInfo(`DB returned ${dbResult.value.length} stations`);
-    for (const station of dbResult.value) {
-      const normalizedName = station.name.toLowerCase().trim();
-      if (!seenNames.has(normalizedName)) {
-        seenNames.add(normalizedName);
-        results.push({
-          ...station,
-          dbStation: station,
-          authoritative: getAuthoritativeSource(station),
-        });
-      } else {
-        // Station exists from NS, add DB data
-        const existing = results.find(
-          (s) => s.name.toLowerCase().trim() === normalizedName
+  // 2. Search registry by name
+  const registryMatches = findStationsByName(query);
+  for (const station of registryMatches) {
+    if (!seenIds.has(station.id)) {
+      seenIds.add(station.id);
+      results.push(station);
+    }
+  }
+
+  // 3. Query active providers in parallel for additional stations
+  const providers = getActiveProviders();
+  const providerResults = await Promise.allSettled(
+    providers.map((provider) =>
+      provider.searchStations(query).then((stations) => ({
+        provider: provider.id,
+        stations,
+      }))
+    )
+  );
+
+  // Process provider results
+  for (const result of providerResults) {
+    if (result.status === "fulfilled") {
+      const { provider, stations } = result.value;
+      logInfo(`${provider} returned ${stations.length} stations`);
+
+      for (const apiStation of stations) {
+        // Try to find existing registry station by provider ID
+        const normalizedName = apiStation.name.toLowerCase().trim();
+        const existingStation = results.find(
+          (s) => s.displayName.toLowerCase().trim() === normalizedName
         );
-        if (existing) {
-          existing.dbStation = station;
-          // If DB station has EVA code, use it (needed for DB API calls)
-          if (station.uicCode && !existing.uicCode) {
-            existing.uicCode = station.uicCode;
+
+        if (existingStation) {
+          // Add provider ID to existing station if not present
+          if (!existingStation.providerIds[provider as ProviderID]) {
+            existingStation.providerIds[provider as ProviderID] =
+              apiStation.code || apiStation.uicCode;
           }
+        } else {
+          // Create new unified station from API result
+          const newStation: UnifiedStation = {
+            id: normalizedName.replace(/\s+/g, "-"),
+            displayName: apiStation.name,
+            country: (apiStation.country?.toUpperCase() || "XX") as CountryCode,
+            coordinates:
+              apiStation.lat && apiStation.lng
+                ? { lat: apiStation.lat, lng: apiStation.lng }
+                : undefined,
+            providerIds: {
+              [provider as ProviderID]: apiStation.code || apiStation.uicCode,
+            },
+          };
+          seenIds.add(newStation.id);
+          results.push(newStation);
         }
       }
+    } else {
+      logError("Provider station search failed", result.reason);
     }
-  } else {
-    logError("DB station search failed", dbResult.reason);
   }
 
-  // Sort by relevance (exact matches first, then alphabetical)
+  // Sort by relevance (exact matches first)
   const queryLower = query.toLowerCase();
   results.sort((a, b) => {
-    const aExact = a.name.toLowerCase().startsWith(queryLower);
-    const bExact = b.name.toLowerCase().startsWith(queryLower);
+    const aExact = a.displayName.toLowerCase().startsWith(queryLower);
+    const bExact = b.displayName.toLowerCase().startsWith(queryLower);
     if (aExact && !bExact) return -1;
     if (bExact && !aExact) return 1;
-    return a.name.localeCompare(b.name);
+    return a.displayName.localeCompare(b.displayName);
   });
 
-  logInfo(`Combined: ${results.length} unique stations`);
+  logInfo(`Found ${results.length} unique stations`);
   return results;
-};
+}
 
 // =============================================================================
-// Journey Search - Orchestrates NS and DB APIs
+// Journey Search
 // =============================================================================
 
 /**
- * Generate a deduplication key for a journey
- * Uses train number + approximate departure time (rounded to 5 min)
+ * Search for journeys between two stations.
+ * Queries relevant providers and stores results in the database.
  */
-const generateDeduplicationKey = (journey: Journey): string => {
-  const trainId = `${journey.trainType}${journey.trainNumber}`.replace(/\s/g, "");
-  const depTime = journey.departure.scheduledDeparture;
-  if (!depTime) {
-    return trainId;
+export async function searchJourneys(
+  fromStation: UnifiedStation,
+  toStation: UnifiedStation,
+  dateTime: string
+): Promise<StoredJourney[]> {
+  logInfo("Searching journeys", {
+    from: fromStation.displayName,
+    to: toStation.displayName,
+    dateTime,
+  });
+
+  // Determine which providers to query
+  const primaryProvider = getProviderForCountry(fromStation.country);
+  const secondaryProvider = getProviderForCountry(toStation.country);
+
+  const providersToQuery = new Set<TrainProvider>();
+  if (primaryProvider) providersToQuery.add(primaryProvider);
+  if (secondaryProvider && secondaryProvider.id !== primaryProvider?.id) {
+    providersToQuery.add(secondaryProvider);
   }
+
+  // Query all relevant providers
+  const allJourneys: Array<{ source: ProviderID; journey: Journey }> = [];
+
+  for (const provider of providersToQuery) {
+    try {
+      const fromId = provider.toProviderStationId(fromStation);
+      const toId = provider.toProviderStationId(toStation);
+
+      if (!fromId || !toId) {
+        logInfo(`${provider.id} missing station IDs, skipping`);
+        continue;
+      }
+
+      logInfo(`Querying ${provider.id}: ${fromId} → ${toId}`);
+
+      const journeys = await provider.searchJourneys({
+        from: fromId,
+        to: toId,
+        dateTime,
+      });
+
+      logInfo(`${provider.id} returned ${journeys.length} journeys`);
+
+      for (const journey of journeys) {
+        allJourneys.push({ source: provider.id, journey });
+      }
+    } catch (error) {
+      logError(`${provider.id} search failed`, error);
+    }
+  }
+
+  // Merge duplicate journeys from different providers
+  const mergedJourneys = mergeJourneys(allJourneys, fromStation, toStation);
+
+  // Convert to storage format and store
+  const storageInputs = mergedJourneys.map((merged) =>
+    toStoredJourneyInput(merged, fromStation, toStation)
+  );
+
+  // Store all journeys
+  const storedJourneys = await storeJourneys(storageInputs);
+
+  // If storage failed, return in-memory versions
+  if (storedJourneys.length === 0) {
+    logInfo("Storage failed, returning in-memory journeys");
+    return storageInputs.map((input, index) => ({
+      ...input,
+      id: `temp-${index}`,
+      stops: input.stops.map((stop, stopIndex) => ({
+        ...stop,
+        id: `temp-stop-${stopIndex}`,
+        journeyId: `temp-${index}`,
+      })),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }));
+  }
+
+  logInfo(`Stored ${storedJourneys.length} journeys`);
+  return storedJourneys;
+}
+
+// =============================================================================
+// Journey Details
+// =============================================================================
+
+/**
+ * Get detailed journey information by database ID.
+ * Optionally refreshes realtime data from providers.
+ */
+export async function getJourneyDetails(
+  journeyId: string,
+  refresh = false
+): Promise<StoredJourney | null> {
+  logInfo(`Getting journey details: ${journeyId}, refresh: ${refresh}`);
+
+  // Fetch from database
+  let journey = await getJourneyById(journeyId);
+
+  if (!journey) {
+    logError("Journey not found", { journeyId });
+    return null;
+  }
+
+  // If refresh requested, re-query providers for realtime data
+  if (refresh) {
+    journey = await refreshJourneyRealtime(journey);
+  }
+
+  return journey;
+}
+
+/**
+ * Refresh realtime data (delays, platforms) for a stored journey.
+ */
+async function refreshJourneyRealtime(
+  journey: StoredJourney
+): Promise<StoredJourney> {
+  logInfo(`Refreshing realtime data for ${journey.journeyKey}`);
+
+  const updates: {
+    status?: JourneyStatus;
+    stops?: Array<{
+      sequence: number;
+      arrivalDelayMin?: number;
+      departureDelayMin?: number;
+      actualPlatform?: string;
+      cancelled?: boolean;
+    }>;
+  } = { stops: [] };
+
+  // Try to get fresh data from each source
+  for (const sourceId of journey.sources) {
+    const provider = getProvider(sourceId as ProviderID);
+    if (!provider) continue;
+
+    try {
+      // Build the provider journey ID
+      let providerJourneyId: string | undefined;
+      if (sourceId === "NS" && journey.nsRawId) {
+        providerJourneyId = `${journey.trainNumber}_${journey.scheduledDeparture}`;
+      } else if (sourceId === "DB" && journey.dbRawId) {
+        providerJourneyId = journey.dbRawId;
+      }
+
+      if (!providerJourneyId) continue;
+
+      const freshJourney = await provider.getJourneyDetails(providerJourneyId);
+      if (!freshJourney) continue;
+
+      // Update status
+      if (freshJourney.status !== "scheduled") {
+        updates.status = freshJourney.status;
+      }
+
+      // Update stops with fresh delay/platform data
+      for (const stop of freshJourney.stops) {
+        const matchingStop = journey.stops.find(
+          (s) =>
+            s.stationName.toLowerCase() === stop.station.name.toLowerCase() ||
+            s.stationId === stop.station.code
+        );
+
+        if (matchingStop) {
+          updates.stops!.push({
+            sequence: matchingStop.sequence,
+            arrivalDelayMin: stop.arrivalDelay,
+            departureDelayMin: stop.departureDelay,
+            actualPlatform: stop.actualPlatform,
+            cancelled: stop.cancelled,
+          });
+        }
+      }
+    } catch (error) {
+      logError(`Failed to refresh from ${sourceId}`, error);
+    }
+  }
+
+  // Apply updates to database
+  if (updates.status || (updates.stops && updates.stops.length > 0)) {
+    const updated = await updateJourneyRealtime(journey.id, updates);
+    if (updated) {
+      logInfo("Realtime update applied");
+      return updated;
+    }
+  }
+
+  return journey;
+}
+
+// =============================================================================
+// Journey Merging
+// =============================================================================
+
+interface MergedJourneyData {
+  trainNumber: string;
+  trainType: string;
+  operator: string;
+  departure: JourneyStop;
+  arrival: JourneyStop;
+  stops: JourneyStop[];
+  duration: number;
+  status: JourneyStatus;
+  sources: ProviderID[];
+  nsRawId?: string;
+  dbRawId?: string;
+}
+
+/**
+ * Merge journeys from different providers that represent the same train.
+ * Uses train number + departure time for matching.
+ */
+function mergeJourneys(
+  journeys: Array<{ source: ProviderID; journey: Journey }>,
+  fromStation: UnifiedStation,
+  toStation: UnifiedStation
+): MergedJourneyData[] {
+  const byKey = new Map<string, MergedJourneyData>();
+
+  for (const { source, journey } of journeys) {
+    const key = generateMergeKey(journey);
+    const existing = byKey.get(key);
+
+    if (existing) {
+      // Merge with existing
+      logInfo(`Merging duplicate journey: ${key}`);
+      mergeIntoExisting(existing, journey, source, fromStation, toStation);
+    } else {
+      // Create new merged journey
+      byKey.set(key, {
+        trainNumber: journey.trainNumber,
+        trainType: journey.trainType,
+        operator: journey.operator,
+        departure: journey.departure,
+        arrival: journey.arrival,
+        stops: journey.stops,
+        duration: journey.duration,
+        status: journey.status,
+        sources: [source],
+        nsRawId: source === "NS" ? journey.id : undefined,
+        dbRawId: source === "DB" ? journey.id : undefined,
+      });
+    }
+  }
+
+  return Array.from(byKey.values());
+}
+
+/**
+ * Generate a key for matching journeys across providers.
+ * Uses train number + rounded departure time.
+ */
+function generateMergeKey(journey: Journey): string {
+  const trainId = `${journey.trainType}${journey.trainNumber}`.replace(
+    /\s/g,
+    ""
+  );
+  const depTime = journey.departure.scheduledDeparture;
+
+  if (!depTime) return trainId;
 
   // Round to nearest 5 minutes for fuzzy matching
   const date = new Date(depTime);
@@ -165,429 +436,133 @@ const generateDeduplicationKey = (journey: Journey): string => {
   const timeKey = date.toISOString().slice(0, 16);
 
   return `${trainId}-${timeKey}`;
-};
+}
 
 /**
- * Convert a JourneyStop to MergedJourneyStop
+ * Merge a new journey into an existing merged journey.
+ * Applies field priority rules based on country authority.
  */
-const toMergedStop = (stop: JourneyStop, source: "NS" | "DB"): MergedJourneyStop => ({
-  ...stop,
-  source,
-});
+function mergeIntoExisting(
+  existing: MergedJourneyData,
+  newJourney: Journey,
+  newSource: ProviderID,
+  fromStation: UnifiedStation,
+  toStation: UnifiedStation
+): void {
+  // Track source
+  if (!existing.sources.includes(newSource)) {
+    existing.sources.push(newSource);
+  }
+
+  // Store raw IDs
+  if (newSource === "NS") {
+    existing.nsRawId = newJourney.id;
+  } else if (newSource === "DB") {
+    existing.dbRawId = newJourney.id;
+  }
+
+  // Field priority: origin country provider authoritative for departure
+  const originProvider = getProviderForCountry(fromStation.country);
+  const destProvider = getProviderForCountry(toStation.country);
+
+  // Update departure if new source is authoritative for origin
+  if (originProvider?.id === newSource) {
+    if (newJourney.departure.platform && !existing.departure.platform) {
+      existing.departure = { ...existing.departure, ...newJourney.departure };
+    }
+  }
+
+  // Update arrival if new source is authoritative for destination
+  if (destProvider?.id === newSource) {
+    if (newJourney.arrival.platform && !existing.arrival.platform) {
+      existing.arrival = { ...existing.arrival, ...newJourney.arrival };
+    }
+  }
+
+  // Use more complete stops list
+  if (newJourney.stops.length > existing.stops.length) {
+    existing.stops = newJourney.stops;
+  } else {
+    // Merge platform info into existing stops
+    for (const newStop of newJourney.stops) {
+      const matchingStop = existing.stops.find(
+        (s) =>
+          s.station.name.toLowerCase() === newStop.station.name.toLowerCase()
+      );
+      if (matchingStop && !matchingStop.platform && newStop.platform) {
+        matchingStop.platform = newStop.platform;
+        matchingStop.plannedPlatform = newStop.plannedPlatform;
+        matchingStop.actualPlatform = newStop.actualPlatform;
+      }
+    }
+  }
+
+  // Use latest realtime data
+  if (newJourney.status !== "scheduled" && existing.status === "scheduled") {
+    existing.status = newJourney.status;
+  }
+}
+
+// =============================================================================
+// Conversion Helpers
+// =============================================================================
 
 /**
- * Convert a Journey to MergedJourney
+ * Convert merged journey data to storage input format.
  */
-const toMergedJourney = (journey: Journey): MergedJourney => {
-  const source = journey.apiSource as "NS" | "DB";
-  
-  // Create a single leg from the journey
-  const leg: MergedJourneyLeg = {
-    trainNumber: journey.trainNumber,
-    trainType: journey.trainType,
-    operator: journey.operator,
-    departure: toMergedStop(journey.departure, source),
-    arrival: toMergedStop(journey.arrival, source),
-    stops: journey.stops.map((s) => toMergedStop(s, source)),
-    duration: journey.duration,
-    source,
-  };
+function toStoredJourneyInput(
+  merged: MergedJourneyData,
+  fromStation: UnifiedStation,
+  toStation: UnifiedStation
+): StoredJourneyInput {
+  const journeyKey = generateJourneyKey(
+    merged.trainType,
+    merged.trainNumber,
+    fromStation.id,
+    merged.departure.scheduledDeparture ?? new Date().toISOString()
+  );
+
+  const stops: Omit<StoredJourneyStop, "id" | "journeyId">[] = merged.stops.map(
+    (stop, index) => ({
+      sequence: index,
+      stationId: stop.station.code || stop.station.name.toLowerCase().replace(/\s+/g, "-"),
+      stationName: stop.station.name,
+      country: stop.station.country || "XX",
+      scheduledArrival: stop.scheduledArrival,
+      scheduledDeparture: stop.scheduledDeparture,
+      arrivalDelayMin: stop.arrivalDelay,
+      departureDelayMin: stop.departureDelay,
+      plannedPlatform: stop.plannedPlatform,
+      actualPlatform: stop.actualPlatform,
+      source: merged.sources[0] as ApiSource,
+      cancelled: stop.cancelled ?? false,
+    })
+  );
 
   return {
-    ...journey,
-    [source === "NS" ? "nsJourney" : "dbJourney"]: journey,
-    deduplicationKey: generateDeduplicationKey(journey),
-    transfers: 0, // Single direct journey
-    legs: [leg],
+    journeyKey,
+    trainNumber: merged.trainNumber,
+    trainType: merged.trainType,
+    operator: merged.operator,
+    originStationId: fromStation.id,
+    originStationName: fromStation.displayName,
+    destinationStationId: toStation.id,
+    destinationStationName: toStation.displayName,
+    scheduledDeparture:
+      merged.departure.scheduledDeparture ?? new Date().toISOString(),
+    scheduledArrival: merged.arrival.scheduledArrival,
+    durationMinutes: merged.duration,
+    status: merged.status,
+    sources: merged.sources as ApiSource[],
+    nsRawId: merged.nsRawId,
+    dbRawId: merged.dbRawId,
+    stops,
   };
-};
-
-/**
- * Merge two journeys that represent the same train
- * Prefers more complete data from each source
- */
-const mergeJourneys = (
-  journey1: MergedJourney,
-  journey2: MergedJourney
-): MergedJourney => {
-  // Combine stops from both sources, preferring more stops
-  const allStops = journey1.legs[0].stops.length >= journey2.legs[0].stops.length
-    ? journey1.legs[0].stops
-    : journey2.legs[0].stops;
-
-  // Merge journey references
-  const merged: MergedJourney = {
-    ...journey1,
-    nsJourney: journey1.nsJourney ?? journey2.nsJourney,
-    dbJourney: journey1.dbJourney ?? journey2.dbJourney,
-    apiSource: "merged",
-    legs: [
-      {
-        ...journey1.legs[0],
-        stops: allStops,
-      },
-    ],
-  };
-
-  // Use more complete arrival info
-  if (!merged.arrival.scheduledArrival && journey2.arrival.scheduledArrival) {
-    merged.arrival = journey2.arrival;
-    merged.legs[0].arrival = toMergedStop(journey2.arrival, journey2.apiSource as "NS" | "DB");
-  }
-
-  return merged;
-};
-
-/**
- * Get the station identifier to use for each API
- */
-const getStationIdForApi = (
-  station: MergedStation,
-  api: "NS" | "DB"
-): string => {
-  if (api === "NS") {
-    // NS accepts station names or codes
-    return station.nsStation?.name ?? station.name;
-  } else {
-    // DB requires EVA number for journey search
-    // If we have a dbStation with code (EVA), use that
-    if (station.dbStation?.uicCode) {
-      return station.dbStation.uicCode;
-    }
-    if (station.dbStation?.code) {
-      return station.dbStation.code;
-    }
-    // Fallback to searching by name
-    return station.uicCode ?? station.code ?? station.name;
-  }
-};
-
-/**
- * Search for international journeys between two stations
- * Queries both NS and DB APIs and merges results
- */
-export const searchJourneys = async (
-  fromStation: MergedStation,
-  toStation: MergedStation,
-  dateTime: string
-): Promise<MergedJourney[]> => {
-  logInfo("Searching international journeys", {
-    from: fromStation.name,
-    to: toStation.name,
-    dateTime,
-  });
-
-  const journeysByKey = new Map<string, MergedJourney>();
-
-  // Determine which APIs to query based on stations
-  const shouldQueryNS = true; // NS has good international coverage
-  const shouldQueryDB = true; // DB also covers international routes
-
-  const apiCalls: Promise<{ source: "NS" | "DB"; journeys: Journey[] }>[] = [];
-
-  // Query NS API
-  if (shouldQueryNS) {
-    const nsFrom = getStationIdForApi(fromStation, "NS");
-    const nsTo = getStationIdForApi(toStation, "NS");
-    
-    logInfo(`Querying NS: ${nsFrom} → ${nsTo}`);
-    
-    apiCalls.push(
-      nsApi
-        .searchJourneys({
-          from: nsFrom,
-          to: nsTo,
-          dateTime,
-        })
-        .then((journeys) => ({ source: "NS" as const, journeys }))
-        .catch((error) => {
-          logError("NS journey search failed", error);
-          return { source: "NS" as const, journeys: [] };
-        })
-    );
-  }
-
-  // Query DB API
-  if (shouldQueryDB) {
-    // For DB, we need EVA numbers. Try to find them.
-    let dbFromId = getStationIdForApi(fromStation, "DB");
-    let dbToId = getStationIdForApi(toStation, "DB");
-
-    // If we don't have EVA numbers, try to look them up
-    if (!dbFromId.match(/^\d{7}$/)) {
-      logInfo(`Looking up DB station ID for: ${fromStation.name}`);
-      try {
-        const dbStations = await dbApi.searchStations(fromStation.name);
-        if (dbStations.length > 0) {
-          const match = dbStations.find(
-            (s) =>
-              s.name.toLowerCase().includes(fromStation.name.toLowerCase()) ||
-              fromStation.name.toLowerCase().includes(s.name.toLowerCase())
-          ) ?? dbStations[0];
-          dbFromId = match.uicCode ?? match.code;
-          logInfo(`Found DB origin: ${match.name} (${dbFromId})`);
-        }
-      } catch (e) {
-        logError("Failed to look up DB origin station", e);
-      }
-    }
-
-    if (!dbToId.match(/^\d{7}$/)) {
-      logInfo(`Looking up DB station ID for: ${toStation.name}`);
-      try {
-        const dbStations = await dbApi.searchStations(toStation.name);
-        if (dbStations.length > 0) {
-          const match = dbStations.find(
-            (s) =>
-              s.name.toLowerCase().includes(toStation.name.toLowerCase()) ||
-              toStation.name.toLowerCase().includes(s.name.toLowerCase())
-          ) ?? dbStations[0];
-          dbToId = match.uicCode ?? match.code;
-          logInfo(`Found DB destination: ${match.name} (${dbToId})`);
-        }
-      } catch (e) {
-        logError("Failed to look up DB destination station", e);
-      }
-    }
-
-    if (dbFromId && dbToId) {
-      logInfo(`Querying DB: ${dbFromId} → ${dbToId}`);
-      
-      apiCalls.push(
-        dbApi
-          .searchJourneys({
-            from: dbFromId,
-            to: dbToId,
-            dateTime,
-          })
-          .then((journeys) => ({ source: "DB" as const, journeys }))
-          .catch((error) => {
-            logError("DB journey search failed", error);
-            return { source: "DB" as const, journeys: [] };
-          })
-      );
-    }
-  }
-
-  // Wait for all API calls
-  const results = await Promise.all(apiCalls);
-
-  // Process and deduplicate results
-  for (const { source, journeys } of results) {
-    logInfo(`${source} returned ${journeys.length} journeys`);
-    
-    for (const journey of journeys) {
-      const merged = toMergedJourney(journey);
-      const key = merged.deduplicationKey;
-
-      if (journeysByKey.has(key)) {
-        // Merge with existing journey
-        const existing = journeysByKey.get(key)!;
-        journeysByKey.set(key, mergeJourneys(existing, merged));
-        logInfo(`Merged duplicate journey: ${key}`);
-      } else {
-        journeysByKey.set(key, merged);
-      }
-    }
-  }
-
-  // Convert to array and sort by departure time
-  const uniqueJourneys = Array.from(journeysByKey.values());
-  uniqueJourneys.sort((a, b) => {
-    const aTime = a.departure.scheduledDeparture ?? "";
-    const bTime = b.departure.scheduledDeparture ?? "";
-    return aTime.localeCompare(bTime);
-  });
-
-  logInfo(`Final result: ${uniqueJourneys.length} unique journeys`);
-  return uniqueJourneys;
-};
+}
 
 // =============================================================================
-// Journey Details - Get full stop information
+// Re-exports for Backward Compatibility
 // =============================================================================
 
-/**
- * Get detailed journey information with all stops
- * Tries to get data from the most authoritative source
- */
-export const getJourneyDetails = async (
-  journey: MergedJourney
-): Promise<MergedJourney> => {
-  logInfo(`Getting details for journey: ${journey.trainType} ${journey.trainNumber}`);
-
-  // Try to get more details from each API
-  const detailCalls: Promise<Journey | null>[] = [];
-
-  // If we have an NS journey, try to get NS details
-  if (journey.nsJourney) {
-    detailCalls.push(
-      nsApi
-        .getJourneyDetails(
-          journey.trainNumber,
-          journey.departure.scheduledDeparture ?? new Date().toISOString()
-        )
-        .catch((e) => {
-          logError("NS journey details failed", e);
-          return null;
-        })
-    );
-  }
-
-  // If we have a DB journey, try to get DB details
-  if (journey.dbJourney && journey.dbJourney.id) {
-    detailCalls.push(
-      dbApi.getJourneyDetails(journey.dbJourney.id).catch((e) => {
-        logError("DB journey details failed", e);
-        return null;
-      })
-    );
-  }
-
-  const results = await Promise.all(detailCalls);
-  
-  // Find the result with the most stops
-  let bestResult: Journey | null = null;
-  let maxStops = journey.stops.length;
-
-  for (const result of results) {
-    if (result && result.stops.length > maxStops) {
-      bestResult = result;
-      maxStops = result.stops.length;
-    }
-  }
-
-  if (bestResult) {
-    logInfo(`Found detailed journey with ${bestResult.stops.length} stops`);
-    const source = bestResult.apiSource as "NS" | "DB";
-    return {
-      ...journey,
-      stops: bestResult.stops,
-      legs: [
-        {
-          ...journey.legs[0],
-          stops: bestResult.stops.map((s) => toMergedStop(s, source)),
-        },
-      ],
-    };
-  }
-
-  return journey;
-};
-
-// =============================================================================
-// Known Major Stations (for common routes)
-// =============================================================================
-
-export const KNOWN_STATIONS = {
-  // Netherlands
-  AMSTERDAM_CENTRAAL: {
-    name: "Amsterdam Centraal",
-    code: "ASD",
-    country: "NL",
-    uicCode: "8400058",
-    authoritative: "NS" as const,
-  },
-  UTRECHT_CENTRAAL: {
-    name: "Utrecht Centraal",
-    code: "UT",
-    country: "NL",
-    uicCode: "8400621",
-    authoritative: "NS" as const,
-  },
-  ARNHEM_CENTRAAL: {
-    name: "Arnhem Centraal",
-    code: "AH",
-    country: "NL",
-    uicCode: "8400071",
-    authoritative: "NS" as const,
-  },
-  
-  // Germany
-  FRANKFURT_HBF: {
-    name: "Frankfurt(Main)Hbf",
-    code: "FF",
-    country: "DE",
-    uicCode: "8000105",
-    authoritative: "DB" as const,
-  },
-  KOLN_HBF: {
-    name: "Köln Hbf",
-    code: "KK",
-    country: "DE",
-    uicCode: "8000207",
-    authoritative: "DB" as const,
-  },
-  DUSSELDORF_HBF: {
-    name: "Düsseldorf Hbf",
-    code: "KD",
-    country: "DE",
-    uicCode: "8000085",
-    authoritative: "DB" as const,
-  },
-  DUISBURG_HBF: {
-    name: "Duisburg Hbf",
-    code: "EDG",
-    country: "DE",
-    uicCode: "8000086",
-    authoritative: "DB" as const,
-  },
-} as const;
-
-/**
- * Station name aliases for common search terms
- * Maps user-friendly names to the known stations
- */
-export const STATION_ALIASES: Record<string, typeof KNOWN_STATIONS[keyof typeof KNOWN_STATIONS]> = {
-  // Amsterdam
-  "amsterdam": KNOWN_STATIONS.AMSTERDAM_CENTRAAL,
-  "amsterdam centraal": KNOWN_STATIONS.AMSTERDAM_CENTRAAL,
-  "amsterdam central": KNOWN_STATIONS.AMSTERDAM_CENTRAAL,
-  "amsterdam cs": KNOWN_STATIONS.AMSTERDAM_CENTRAAL,
-  
-  // Frankfurt
-  "frankfurt": KNOWN_STATIONS.FRANKFURT_HBF,
-  "frankfurt hbf": KNOWN_STATIONS.FRANKFURT_HBF,
-  "frankfurt main": KNOWN_STATIONS.FRANKFURT_HBF,
-  "frankfurt am main": KNOWN_STATIONS.FRANKFURT_HBF,
-  "frankfurt(main)hbf": KNOWN_STATIONS.FRANKFURT_HBF,
-  
-  // Köln
-  "köln": KNOWN_STATIONS.KOLN_HBF,
-  "koln": KNOWN_STATIONS.KOLN_HBF,
-  "cologne": KNOWN_STATIONS.KOLN_HBF,
-  "köln hbf": KNOWN_STATIONS.KOLN_HBF,
-  "koln hbf": KNOWN_STATIONS.KOLN_HBF,
-  
-  // Düsseldorf
-  "düsseldorf": KNOWN_STATIONS.DUSSELDORF_HBF,
-  "dusseldorf": KNOWN_STATIONS.DUSSELDORF_HBF,
-  "düsseldorf hbf": KNOWN_STATIONS.DUSSELDORF_HBF,
-  "dusseldorf hbf": KNOWN_STATIONS.DUSSELDORF_HBF,
-  
-  // Utrecht
-  "utrecht": KNOWN_STATIONS.UTRECHT_CENTRAAL,
-  "utrecht centraal": KNOWN_STATIONS.UTRECHT_CENTRAAL,
-  "utrecht cs": KNOWN_STATIONS.UTRECHT_CENTRAAL,
-  
-  // Arnhem
-  "arnhem": KNOWN_STATIONS.ARNHEM_CENTRAAL,
-  "arnhem centraal": KNOWN_STATIONS.ARNHEM_CENTRAAL,
-};
-
-/**
- * Try to find a known station from a search query
- */
-export const findKnownStation = (query: string): MergedStation | null => {
-  const normalized = query.toLowerCase().trim();
-  const known = STATION_ALIASES[normalized];
-  
-  if (known) {
-    return {
-      ...known,
-      authoritative: known.authoritative,
-    };
-  }
-  
-  return null;
-};
+export { STATION_REGISTRY, type UnifiedStation } from "../data/stationRegistry";
+export { findStationIdByAlias } from "../data/stationAliases";

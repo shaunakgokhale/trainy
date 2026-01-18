@@ -94,3 +94,83 @@ export type InternationalSearchParams = {
   toStation: MergedStation | null;
   dateTime: string;
 };
+
+// =============================================================================
+// Stored Journey Types (Supabase persistence)
+// =============================================================================
+
+/**
+ * A stop as stored in the database
+ */
+export type StoredJourneyStop = {
+  id: string;
+  journeyId: string;
+  sequence: number;
+  stationId: string;
+  stationName: string;
+  country: string;
+  scheduledArrival?: string;
+  scheduledDeparture?: string;
+  arrivalDelayMin?: number;
+  departureDelayMin?: number;
+  plannedPlatform?: string;
+  actualPlatform?: string;
+  source: ApiSource;
+  cancelled: boolean;
+};
+
+/**
+ * A journey as stored in the database
+ */
+export type StoredJourney = {
+  /** Database UUID */
+  id: string;
+  /** Unique key: {trainType}{trainNumber}_{originStationId}_{departureISO} */
+  journeyKey: string;
+  /** Train information */
+  trainNumber: string;
+  trainType: string;
+  operator: string;
+  /** Station information */
+  originStationId: string;
+  originStationName: string;
+  destinationStationId: string;
+  destinationStationName: string;
+  /** Timing */
+  scheduledDeparture: string;
+  scheduledArrival?: string;
+  durationMinutes: number;
+  /** Status */
+  status: JourneyStatus;
+  /** Which APIs contributed data to this journey */
+  sources: ApiSource[];
+  /** Original API journey IDs for refresh */
+  nsRawId?: string;
+  dbRawId?: string;
+  /** All stops on this journey */
+  stops: StoredJourneyStop[];
+  /** Timestamps */
+  createdAt: string;
+  updatedAt: string;
+};
+
+/**
+ * Input for creating/updating a stored journey
+ */
+export type StoredJourneyInput = Omit<StoredJourney, "id" | "createdAt" | "updatedAt" | "stops"> & {
+  stops: Omit<StoredJourneyStop, "id" | "journeyId">[];
+};
+
+/**
+ * Generate a journey key for deduplication
+ */
+export function generateJourneyKey(
+  trainType: string,
+  trainNumber: string,
+  originStationId: string,
+  scheduledDeparture: string
+): string {
+  // Normalize the departure time to ISO format without milliseconds
+  const depTime = new Date(scheduledDeparture).toISOString().slice(0, 19);
+  return `${trainType}${trainNumber}_${originStationId}_${depTime}`;
+}
