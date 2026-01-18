@@ -10,7 +10,7 @@ type StationSearchState = {
 };
 
 type Props = {
-  onSearch: (fromEva: string, toEva: string, dateTime: string) => void;
+  onSearch: (fromStation: Station, toStation: Station, dateTime: string) => void;
   loading: boolean;
 };
 
@@ -136,7 +136,7 @@ export function DBJourneySearchPanel({ onSearch, loading }: Props) {
       return;
     }
 
-    onSearch(from.uicCode, to.uicCode, new Date(dateTime).toISOString());
+    onSearch(from, to, dateTime);
   };
 
   const LoadingSpinner = () => (

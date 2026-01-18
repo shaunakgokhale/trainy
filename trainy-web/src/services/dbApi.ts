@@ -167,6 +167,16 @@ const parseTimetableTime = (timeStr?: string): string | undefined => {
   return `${year}-${mm}-${dd}T${hh}:${min}:00`;
 };
 
+// Build local date + hour strings for DB Timetables (uses local time)
+const formatTimetableDateHour = (dateInput: string | Date): { dateStr: string; hourStr: string } => {
+  const date = dateInput instanceof Date ? dateInput : new Date(dateInput);
+  const yy = `${date.getFullYear()}`.slice(2);
+  const mm = `${date.getMonth() + 1}`.padStart(2, "0");
+  const dd = `${date.getDate()}`.padStart(2, "0");
+  const hour = `${date.getHours()}`.padStart(2, "0");
+  return { dateStr: `${yy}${mm}${dd}`, hourStr: hour };
+};
+
 // Calculate delay in minutes between two time strings
 const calculateDelayMinutes = (scheduled?: string, actual?: string): number | undefined => {
   if (!scheduled || !actual) return undefined;
@@ -285,6 +295,59 @@ export const extractOriginFromPath = (ppth?: string): string | undefined => {
   return stations.length > 0 ? stations[0].trim() : undefined;
 };
 
+// Parse ppth to extract all station names as JourneyStops
+// ar.ppth = stations BEFORE current (train came from these)
+// dp.ppth = stations AFTER current (train goes to these)
+const parsePathToStops = (ppth?: string): JourneyStop[] => {
+  if (!ppth) return [];
+  return ppth.split("|").map((name) => ({
+    station: {
+      code: "",
+      name: name.trim(),
+      country: "DE",
+    },
+  }));
+};
+
+// Build full route from Timetables ppth fields
+// Combines: ar.ppth (origin → current) + current station + dp.ppth (current → destination)
+const buildFullRouteFromPpth = (
+  raw: DBTimetableStopRaw,
+  currentStationName: string,
+  currentStationEva: string,
+  scheduledDeparture?: string
+): JourneyStop[] => {
+  const stops: JourneyStop[] = [];
+
+  // 1. Stations before current (from ar.ppth - these are in order from origin)
+  if (raw.ar?.ppth) {
+    const beforeStops = parsePathToStops(raw.ar.ppth);
+    stops.push(...beforeStops);
+  }
+
+  // 2. Current station (where we're departing from)
+  stops.push({
+    station: {
+      code: currentStationEva,
+      name: currentStationName,
+      country: "DE",
+      uicCode: currentStationEva,
+    },
+    scheduledDeparture,
+    platform: raw.dp?.cp ?? raw.dp?.pp,
+    plannedPlatform: raw.dp?.pp,
+    actualPlatform: raw.dp?.cp,
+  });
+
+  // 3. Stations after current (from dp.ppth - these are in order to destination)
+  if (raw.dp?.ppth) {
+    const afterStops = parsePathToStops(raw.dp.ppth);
+    stops.push(...afterStops);
+  }
+
+  return stops;
+};
+
 // Map Timetables stop to a Journey (for departure board)
 const mapTimetableStopToJourney = (
   raw: DBTimetableStopRaw,
@@ -300,6 +363,10 @@ const mapTimetableStopToJourney = (
   // For arrivals: extract origin from ar.ppth (first station in path)
   const destinationName = raw.dp?.ppth ? extractDestinationFromPath(raw.dp.ppth) : undefined;
 
+  // Build full route from ppth fields
+  const scheduledDeparture = parseTimetableTime(raw.dp?.pt);
+  const allStops = buildFullRouteFromPpth(raw, stationName, stationEva, scheduledDeparture);
+
   // Create departure stop (current station)
   const departureStop: JourneyStop = {
     ...stop,
@@ -312,13 +379,12 @@ const mapTimetableStopToJourney = (
   };
 
   // Create arrival stop (destination station from path, or same as departure if no path)
-  const arrivalStop: JourneyStop = {
+  const arrivalStop: JourneyStop = allStops.length > 0 ? allStops[allStops.length - 1] : {
     station: {
       code: "", // EVA not available from path
       name: destinationName ?? stationName,
       country: "DE",
     },
-    // Arrival time not available from station board
     scheduledArrival: undefined,
     scheduledDeparture: undefined,
   };
@@ -337,8 +403,8 @@ const mapTimetableStopToJourney = (
     operator: raw.tl?.o ?? "DB",
     departure: departureStop,
     arrival: arrivalStop,
-    stops: [departureStop], // Only have current station from board
-    duration: 0, // Arrival time not available from station board
+    stops: allStops, // Full route from ppth
+    duration: 0, // Exact arrival time not available from station board
     status,
     apiSource: "DB",
     rawData: raw,
@@ -499,9 +565,7 @@ export const searchStations = async (query: string): Promise<Station[]> => {
  */
 export const getDepartures = async (evaNumber: string, dateTime: string): Promise<Journey[]> => {
   try {
-    const date = new Date(dateTime);
-    const dateStr = date.toISOString().slice(2, 10).replace(/-/g, ""); // YYMMDD
-    const hourStr = date.getHours().toString().padStart(2, "0");
+    const { dateStr, hourStr } = formatTimetableDateHour(dateTime);
 
     const url = `${TIMETABLES_BASE_URL}/plan/${encodeURIComponent(evaNumber)}/${dateStr}/${hourStr}`;
     const { data } = await fetchXml<{ timetable?: DBTimetablePlanResponse }>(url, {
@@ -646,6 +710,56 @@ export const getJourneyDetails = async (journeyId: string): Promise<Journey | nu
 // Legacy/Convenience Functions
 // =============================================================================
 
+type DBArrivalInfo = {
+  time: string;
+  stationName: string;
+};
+
+const buildArrivalsMap = async (
+  destinationEva: string,
+  dateTime: string,
+  hoursToCheck: number
+): Promise<Map<string, DBArrivalInfo>> => {
+  const arrivals: Map<string, DBArrivalInfo> = new Map();
+  const baseDateTime = new Date(dateTime);
+
+  for (let offset = 0; offset <= hoursToCheck; offset += 1) {
+    const destDateTime = new Date(baseDateTime);
+    destDateTime.setHours(destDateTime.getHours() + offset);
+
+    const { dateStr, hourStr } = formatTimetableDateHour(destDateTime);
+    const destUrl = `${TIMETABLES_BASE_URL}/plan/${encodeURIComponent(destinationEva)}/${dateStr}/${hourStr}`;
+
+    try {
+      const { data: destData } = await fetchXml<{ timetable?: DBTimetablePlanResponse }>(destUrl, {
+        evaNo: destinationEva,
+      });
+
+      const destStops = destData.timetable?.s;
+      const destStationName = destData.timetable?.station ?? "";
+
+      if (destStops) {
+        const destStopsArray = Array.isArray(destStops) ? destStops : [destStops];
+
+        // Build a map of train number -> arrival time at destination
+        for (const stop of destStopsArray) {
+          if (stop.ar?.pt && stop.tl?.n) {
+            const trainKey = `${stop.tl.c ?? stop.tl.t ?? ""}${stop.tl.n}`;
+            const arrivalTime = parseTimetableTime(stop.ar.pt);
+            if (arrivalTime) {
+              arrivals.set(trainKey, { time: arrivalTime, stationName: destStationName });
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.warn("[DB API] buildArrivalsMap: Could not fetch destination arrivals", error);
+    }
+  }
+
+  return arrivals;
+};
+
 /**
  * Search for journeys between two stations
  * Note: Neither API directly supports A→B routing. This uses Timetables departure boards.
@@ -660,42 +774,8 @@ export const searchJourneys = async (
   // Get departures from origin station
   const departures = await getDepartures(params.from, params.dateTime);
 
-  // Get arrivals at destination station (for the same time window + buffer for travel time)
-  // Add 3 hours buffer to capture trains that depart now and arrive later
-  const destDateTime = new Date(params.dateTime);
-  destDateTime.setHours(destDateTime.getHours() + 3);
-  
-  const destUrl = `${TIMETABLES_BASE_URL}/plan/${encodeURIComponent(params.to)}/${
-    destDateTime.toISOString().slice(2, 10).replace(/-/g, "")
-  }/${destDateTime.getHours().toString().padStart(2, "0")}`;
-
-  const arrivals: Map<string, { time: string; stationName: string }> = new Map();
-  
-  try {
-    const { data: destData } = await fetchXml<{ timetable?: DBTimetablePlanResponse }>(destUrl, {
-      evaNo: params.to,
-    });
-
-    const destStops = destData.timetable?.s;
-    const destStationName = destData.timetable?.station ?? "";
-    
-    if (destStops) {
-      const destStopsArray = Array.isArray(destStops) ? destStops : [destStops];
-      
-      // Build a map of train number -> arrival time at destination
-      for (const stop of destStopsArray) {
-        if (stop.ar?.pt && stop.tl?.n) {
-          const trainKey = `${stop.tl.c ?? stop.tl.t ?? ""}${stop.tl.n}`;
-          const arrivalTime = parseTimetableTime(stop.ar.pt);
-          if (arrivalTime) {
-            arrivals.set(trainKey, { time: arrivalTime, stationName: destStationName });
-          }
-        }
-      }
-    }
-  } catch (error) {
-    console.warn("[DB API] searchJourneys: Could not fetch destination arrivals", error);
-  }
+  // Get arrivals at destination station for multiple hours (to capture travel time)
+  const arrivals = await buildArrivalsMap(params.to, params.dateTime, 4);
 
   // Match departures with arrivals to calculate duration
   // Try multiple key formats since train types may differ between stations
@@ -747,6 +827,62 @@ export const searchJourneys = async (
   const filteredJourneys = journeysWithDuration.filter((j) => j.duration > 0);
 
   return filteredJourneys.length > 0 ? filteredJourneys : departures;
+};
+
+/**
+ * Search for journeys between two stations (strict)
+ * Returns only trains that are observed arriving at the destination station.
+ */
+export const searchJourneysStrict = async (
+  params: JourneySearchParams
+): Promise<Journey[]> => {
+  console.log("[DB API] searchJourneysStrict: Fetching departures from origin and arrivals at destination");
+
+  const departures = await getDepartures(params.from, params.dateTime);
+  const arrivals = await buildArrivalsMap(params.to, params.dateTime, 4);
+  const journeysWithDuration = departures.map((journey) => {
+    const trainKey = `${journey.trainType}${journey.trainNumber}`;
+    const trainNumberOnly = journey.trainNumber;
+
+    let arrivalInfo = arrivals.get(trainKey);
+
+    if (!arrivalInfo) {
+      for (const [key, value] of arrivals.entries()) {
+        if (key.endsWith(trainNumberOnly)) {
+          arrivalInfo = value;
+          break;
+        }
+      }
+    }
+
+    if (arrivalInfo && journey.departure.scheduledDeparture) {
+      const depTime = new Date(journey.departure.scheduledDeparture).getTime();
+      const arrTime = new Date(arrivalInfo.time).getTime();
+      const durationMinutes = Math.round((arrTime - depTime) / 60000);
+
+      if (durationMinutes > 0 && durationMinutes < 1440) {
+        return {
+          ...journey,
+          duration: durationMinutes,
+          arrival: {
+            ...journey.arrival,
+            station: {
+              ...journey.arrival.station,
+              name: arrivalInfo.stationName,
+              code: params.to,
+              uicCode: params.to,
+            },
+            scheduledArrival: arrivalInfo.time,
+          },
+        };
+      }
+    }
+
+    return journey;
+  });
+
+  const strictResults = journeysWithDuration.filter((j) => j.duration > 0);
+  return strictResults;
 };
 
 /**

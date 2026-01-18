@@ -1045,7 +1045,7 @@ function DBApiTest() {
   const [detailLoading, setDetailLoading] = useState(false);
 
   // Search handler
-  const handleSearch = async (fromEva: string, toEva: string, dateTime: string) => {
+  const handleSearch = async (fromStation: Station, toStation: Station, dateTime: string) => {
     setJourneyResult({
       data: null,
       error: null,
@@ -1057,14 +1057,40 @@ function DBApiTest() {
     setDetailedJourney(null);
 
     const ts = getTimestamp();
-    console.log(`[APITestPage][${ts}] DB Journey Search: ${fromEva} → ${toEva} @ ${dateTime}`);
+    console.log(
+      `[APITestPage][${ts}] DB Journey Search: ${fromStation.name} (${fromStation.uicCode}) → ${toStation.name} (${toStation.uicCode}) @ ${dateTime}`
+    );
 
     try {
-      const journeys = await dbApi.searchJourneys({
-        from: fromEva,
-        to: toEva,
+      const primaryJourneys = await dbApi.searchJourneysStrict({
+        from: fromStation.uicCode ?? "",
+        to: toStation.uicCode ?? "",
         dateTime,
       });
+      let journeys = primaryJourneys;
+      let fallbackStation: Station | null = null;
+
+      if (journeys.length === 0) {
+        const fallbackName = toStation.name.replace(/\s*\(tief\)/i, "").trim();
+        if (fallbackName && fallbackName !== toStation.name) {
+          const candidates = await dbApi.searchStations(fallbackName);
+          const candidate = candidates.find(
+            (station) =>
+              station.uicCode &&
+              station.uicCode !== toStation.uicCode &&
+              !station.name.toLowerCase().includes("tief")
+          );
+          if (candidate) {
+            fallbackStation = candidate;
+            journeys = await dbApi.searchJourneysStrict({
+              from: fromStation.uicCode ?? "",
+              to: candidate.uicCode ?? "",
+              dateTime,
+            });
+          }
+        }
+      }
+
       console.log(`[APITestPage][${ts}] DB Journeys Result:`, journeys);
       setJourneyResult({
         data: journeys,

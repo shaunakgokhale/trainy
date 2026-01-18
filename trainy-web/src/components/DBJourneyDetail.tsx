@@ -112,9 +112,16 @@ function StopItem({
 }
 
 export function DBJourneyDetail({ journey, detailedJourney, loading, onBack }: Props) {
+  // Prefer RIS::Journeys stops, fall back to Timetables ppth stops
+  const risStops = detailedJourney?.stops ?? [];
+  const timetablesStops = journey.stops ?? [];
+  
+  // Use RIS::Journeys stops if available and has content, otherwise use Timetables ppth
+  const stops = risStops.length > 1 ? risStops : timetablesStops;
+  const hasStops = stops.length > 1;
+  const dataSource = risStops.length > 1 ? "RIS::Journeys (full)" : timetablesStops.length > 1 ? "Timetables (route from ppth)" : "Timetables (partial)";
+  
   const displayJourney = detailedJourney ?? journey;
-  const stops = displayJourney.stops ?? [];
-  const hasDetailedStops = detailedJourney !== null && stops.length > 1;
 
   return (
     <section className="rounded border bg-white p-4">
@@ -172,14 +179,14 @@ export function DBJourneyDetail({ journey, detailedJourney, loading, onBack }: P
               </div>
             </div>
             <div className="mt-2 text-xs text-gray-500">
-              Data source: {detailedJourney ? "RIS::Journeys (full)" : "Timetables (partial)"}
+              Data source: {dataSource}
             </div>
           </div>
 
           {/* Stops timeline */}
           <div className="mb-4">
-            <h4 className="mb-2 text-sm font-semibold">Route & Stops</h4>
-            {!hasDetailedStops && (
+            <h4 className="mb-2 text-sm font-semibold">Route & Stops ({stops.length} stations)</h4>
+            {!hasStops && (
               <p className="mb-2 text-xs text-yellow-700 bg-yellow-50 p-2 rounded">
                 Full stop information not available. Showing origin/destination only.
               </p>
@@ -190,10 +197,10 @@ export function DBJourneyDetail({ journey, detailedJourney, loading, onBack }: P
             {/* Timeline line */}
             <div className="absolute left-4 top-2 h-[calc(100%-16px)] w-0.5 bg-gray-200" />
 
-            {hasDetailedStops ? (
+            {hasStops ? (
               stops.map((stop, idx) => (
                 <StopItem
-                  key={`${stop.station.code}-${idx}`}
+                  key={`${stop.station.name}-${idx}`}
                   stop={stop}
                   type={idx === 0 ? "departure" : idx === stops.length - 1 ? "arrival" : "intermediate"}
                   isFirst={idx === 0}
