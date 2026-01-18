@@ -106,6 +106,11 @@ type DBEventRaw = {
   timePredicted?: string;
   platformSchedule?: string;
   platformPredicted?: string;
+  platform?: string;
+  plannedPlatform?: string;
+  actualPlatform?: string;
+  platformPlanned?: string;
+  platformActual?: string;
   cancelled?: boolean;
 };
 
@@ -153,6 +158,36 @@ const logRequest = (api: string, method: string, url: string, params?: Record<st
 const logResponse = (api: string, status: number, data: unknown) => {
   const preview = typeof data === "string" ? data.slice(0, 500) : JSON.stringify(data)?.slice(0, 500);
   console.log(`[DB ${api}][${getTimestamp()}] Response`, { status, preview });
+};
+
+let journeysProbeLogged = false;
+
+const probeJourneysBase = async () => {
+  if (journeysProbeLogged) return;
+  journeysProbeLogged = true;
+  const probeUrls = [
+    `${JOURNEYS_BASE_URL}/openapi.json`,
+    `${JOURNEYS_BASE_URL}/`,
+  ];
+  // #region agent log
+  fetch('http://127.0.0.1:7243/ingest/b258d2ce-af1d-45fe-9640-bb8d33995204',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'dbApi.ts:probeJourneysBase',message:'enter',data:{probeUrls},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H4'})}).catch(()=>{});
+  // #endregion
+  await Promise.all(probeUrls.map(async (probeUrl) => {
+    try {
+      const response = await fetch(probeUrl, {
+        method: "GET",
+        headers: createHeaders(false),
+      });
+      const contentType = response.headers.get("content-type");
+      // #region agent log
+      fetch('http://127.0.0.1:7243/ingest/b258d2ce-af1d-45fe-9640-bb8d33995204',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'dbApi.ts:probeJourneysBase',message:'probe-response',data:{probeUrl,status:response.status,contentType},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H4'})}).catch(()=>{});
+      // #endregion
+    } catch (error) {
+      // #region agent log
+      fetch('http://127.0.0.1:7243/ingest/b258d2ce-af1d-45fe-9640-bb8d33995204',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'dbApi.ts:probeJourneysBase',message:'probe-error',data:{probeUrl,error:String(error)},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H4'})}).catch(()=>{});
+      // #endregion
+    }
+  }));
 };
 
 // Parse DB Timetables time format (YYMMDDHHMM) to ISO string
@@ -423,15 +458,34 @@ const mapJourneyStation = (raw?: DBStopPlaceRaw): Station => {
   };
 };
 
+const resolveEventPlatforms = (event?: DBEventRaw) => {
+  const plannedPlatform =
+    event?.platformSchedule ??
+    event?.plannedPlatform ??
+    event?.platformPlanned ??
+    event?.platform ??
+    undefined;
+  const actualPlatform =
+    event?.platformPredicted ??
+    event?.actualPlatform ??
+    event?.platformActual ??
+    undefined;
+  const platform = actualPlatform ?? plannedPlatform;
+
+  return { platform, plannedPlatform, actualPlatform };
+};
+
 // Map RIS::Journeys event to JourneyStop
 const mapJourneyStop = (event?: DBEventRaw): JourneyStop => {
+  const { platform, plannedPlatform, actualPlatform } = resolveEventPlatforms(event);
+
   return {
     station: mapJourneyStation(event?.station),
     scheduledArrival: event?.timeSchedule,
     scheduledDeparture: event?.timeSchedule,
-    platform: event?.platformPredicted ?? event?.platformSchedule,
-    plannedPlatform: event?.platformSchedule,
-    actualPlatform: event?.platformPredicted,
+    platform,
+    plannedPlatform,
+    actualPlatform,
     departureDelay: calculateDelayMinutes(event?.timeSchedule, event?.timePredicted),
     arrivalDelay: calculateDelayMinutes(event?.timeSchedule, event?.timePredicted),
     cancelled: event?.cancelled,
@@ -486,8 +540,13 @@ const mapJourney = (journey: DBJourneyRaw): Journey => {
 // Fetch JSON from RIS::Journeys API
 const fetchJson = async <T>(
   url: string,
-  params?: Record<string, string>
+  params?: Record<string, string>,
+  options?: { throwOnError?: boolean }
 ): Promise<{ data: T; status: number }> => {
+  const throwOnError = options?.throwOnError ?? true;
+  // #region agent log
+  fetch('http://127.0.0.1:7243/ingest/b258d2ce-af1d-45fe-9640-bb8d33995204',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'dbApi.ts:fetchJson',message:'enter',data:{url,params,throwOnError},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H1'})}).catch(()=>{});
+  // #endregion
   logRequest("Journeys", "GET", url, params);
 
   const response = await fetch(url, {
@@ -497,8 +556,22 @@ const fetchJson = async <T>(
 
   const data = (await response.json()) as T;
   logResponse("Journeys", response.status, data);
+  const errorInfo =
+    data && typeof data === "object"
+      ? {
+          httpCode: (data as { httpCode?: string }).httpCode,
+          httpMessage: (data as { httpMessage?: string }).httpMessage,
+          moreInformation: (data as { moreInformation?: string }).moreInformation,
+        }
+      : undefined;
+  // #region agent log
+  fetch('http://127.0.0.1:7243/ingest/b258d2ce-af1d-45fe-9640-bb8d33995204',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'dbApi.ts:fetchJson',message:'parsed-response',data:{url,status:response.status,ok:response.ok,errorInfo},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H8'})}).catch(()=>{});
+  // #endregion
+  // #region agent log
+  fetch('http://127.0.0.1:7243/ingest/b258d2ce-af1d-45fe-9640-bb8d33995204',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'dbApi.ts:fetchJson',message:'after-response',data:{url,status:response.status,ok:response.ok},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H1'})}).catch(()=>{});
+  // #endregion
 
-  if (!response.ok) {
+  if (!response.ok && throwOnError) {
     throw new Error(`DB Journeys API request failed with status ${response.status}.`);
   }
 
@@ -648,7 +721,7 @@ export const getRecentChanges = async (evaNumber: string): Promise<Journey[]> =>
 
 /**
  * Search for journeys by train number
- * Uses: RIS::Journeys API GET /find
+ * Uses: RIS::Journeys API GET /journeys (fallback to /find)
  * @param trainNumber - The train number to search for (e.g., "123" for ICE 123)
  * @param dateTime - ISO datetime string for the search date
  * @param transportTypes - Optional array of transport types
@@ -659,6 +732,10 @@ export const findJourneys = async (
   transportTypes?: string[]
 ): Promise<Journey[]> => {
   try {
+    await probeJourneysBase();
+    // #region agent log
+    fetch('http://127.0.0.1:7243/ingest/b258d2ce-af1d-45fe-9640-bb8d33995204',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'dbApi.ts:findJourneys',message:'enter',data:{trainNumber,dateTime,transportTypes},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H2'})}).catch(()=>{});
+    // #endregion
     const params = new URLSearchParams();
     params.set("journeyNumber", trainNumber);
     params.set("date", dateTime.split("T")[0]);
@@ -667,14 +744,55 @@ export const findJourneys = async (
       params.set("transportTypes", transportTypes.join(","));
     }
 
-    const url = `${JOURNEYS_BASE_URL}/find?${params.toString()}`;
+    const primaryUrl = `${JOURNEYS_BASE_URL}/journeys?${params.toString()}`;
+    // #region agent log
+    fetch('http://127.0.0.1:7243/ingest/b258d2ce-af1d-45fe-9640-bb8d33995204',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'dbApi.ts:findJourneys',message:'primary-url',data:{primaryUrl},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H2'})}).catch(()=>{});
+    // #endregion
+    const { data: primaryData, status: primaryStatus } = await fetchJson<DBJourneysResponse>(
+      primaryUrl,
+      {
+        journeyNumber: trainNumber,
+        date: dateTime,
+      },
+      { throwOnError: false }
+    );
 
-    const { data } = await fetchJson<DBJourneysResponse>(url, {
-      journeyNumber: trainNumber,
-      date: dateTime,
-    });
+    if (primaryStatus === 404) {
+      const fallbackUrl = `${JOURNEYS_BASE_URL}/find?${params.toString()}`;
+      // #region agent log
+      fetch('http://127.0.0.1:7243/ingest/b258d2ce-af1d-45fe-9640-bb8d33995204',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'dbApi.ts:findJourneys',message:'fallback-url',data:{fallbackUrl},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H3'})}).catch(()=>{});
+      // #endregion
+      const { data: fallbackData, status: fallbackStatus } = await fetchJson<DBJourneysResponse>(
+        fallbackUrl,
+        {
+          journeyNumber: trainNumber,
+          date: dateTime,
+        },
+        { throwOnError: false }
+      );
 
-    const journeys = data.journeys ?? [];
+      if (fallbackStatus === 404) {
+        // #region agent log
+        fetch('http://127.0.0.1:7243/ingest/b258d2ce-af1d-45fe-9640-bb8d33995204',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'dbApi.ts:findJourneys',message:'both-404',data:{primaryStatus,fallbackStatus,primaryUrl,fallbackUrl},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H3'})}).catch(()=>{});
+        // #endregion
+        throw new Error("DB Journeys API request failed with status 404.");
+      }
+
+      const fallbackJourneys = fallbackData.journeys ?? [];
+      // #region agent log
+      fetch('http://127.0.0.1:7243/ingest/b258d2ce-af1d-45fe-9640-bb8d33995204',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'dbApi.ts:findJourneys',message:'fallback-success',data:{count:fallbackJourneys.length},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H3'})}).catch(()=>{});
+      // #endregion
+      return fallbackJourneys.map(mapJourney);
+    }
+
+    if (primaryStatus >= 400) {
+      throw new Error(`DB Journeys API request failed with status ${primaryStatus}.`);
+    }
+
+    const journeys = primaryData.journeys ?? [];
+    // #region agent log
+    fetch('http://127.0.0.1:7243/ingest/b258d2ce-af1d-45fe-9640-bb8d33995204',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'dbApi.ts:findJourneys',message:'primary-success',data:{count:journeys.length},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H2'})}).catch(()=>{});
+    // #endregion
     return journeys.map(mapJourney);
   } catch (error) {
     console.error(`[DB Journeys][${getTimestamp()}] findJourneys error`, error);
@@ -697,6 +815,15 @@ export const getJourneyDetails = async (journeyId: string): Promise<Journey | nu
 
     if (!data) {
       return null;
+    }
+
+    if (data.events && data.events.length > 0) {
+      const sampleEvent = data.events[0];
+      console.log("[DB Journeys] getJourneyDetails sample event fields", {
+        journeyId,
+        sampleEvent,
+        keys: Object.keys(sampleEvent ?? {}),
+      });
     }
 
     return mapJourney(data);
