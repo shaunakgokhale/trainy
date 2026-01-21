@@ -40,6 +40,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     providerIds: {
       NS: "ASD",
       DB: "8400058",
+      SBB: "8400058",
     },
   },
   "amsterdam-zuid": {
@@ -50,6 +51,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     providerIds: {
       NS: "ASZ",
       DB: "8400061",
+      SBB: "8400061",
     },
   },
   "utrecht-centraal": {
@@ -60,6 +62,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     providerIds: {
       NS: "UT",
       DB: "8400621",
+      SBB: "8400621",
     },
   },
   "arnhem-centraal": {
@@ -70,6 +73,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     providerIds: {
       NS: "AH",
       DB: "8400071",
+      SBB: "8400071",
     },
   },
   "rotterdam-centraal": {
@@ -80,6 +84,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     providerIds: {
       NS: "RTD",
       DB: "8400530",
+      SBB: "8400530",
     },
   },
   "den-haag-centraal": {
@@ -90,6 +95,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     providerIds: {
       NS: "GVC",
       DB: "8400280",
+      SBB: "8400280",
     },
   },
   "schiphol-airport": {
@@ -100,6 +106,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     providerIds: {
       NS: "SHL",
       DB: "8400561",
+      SBB: "8400561",
     },
   },
   "eindhoven-centraal": {
@@ -110,6 +117,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     providerIds: {
       NS: "EHV",
       DB: "8400206",
+      SBB: "8400206",
     },
   },
 
@@ -124,6 +132,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     providerIds: {
       NS: "Frankfurt (Main) Hbf",
       DB: "8000105",
+      SBB: "8011068",
     },
   },
   "koln-hbf": {
@@ -134,6 +143,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     providerIds: {
       NS: "Köln Hbf",
       DB: "8000207",
+      SBB: "8015458",
     },
   },
   "dusseldorf-hbf": {
@@ -144,6 +154,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     providerIds: {
       NS: "Düsseldorf Hbf",
       DB: "8000085",
+      SBB: "8000085",
     },
   },
   "duisburg-hbf": {
@@ -154,6 +165,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     providerIds: {
       NS: "Duisburg Hbf",
       DB: "8000086",
+      SBB: "8000086",
     },
   },
   "essen-hbf": {
@@ -164,6 +176,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     providerIds: {
       NS: "Essen Hbf",
       DB: "8000098",
+      SBB: "8000098",
     },
   },
   "dortmund-hbf": {
@@ -174,6 +187,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     providerIds: {
       NS: "Dortmund Hbf",
       DB: "8000080",
+      SBB: "8000080",
     },
   },
   "berlin-hbf": {
@@ -184,6 +198,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     providerIds: {
       NS: "Berlin Hbf",
       DB: "8011160",
+      SBB: "8011160",
     },
   },
   "munchen-hbf": {
@@ -194,6 +209,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     providerIds: {
       NS: "München Hbf",
       DB: "8000261",
+      SBB: "8020347",
     },
   },
   "hamburg-hbf": {
@@ -204,6 +220,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     providerIds: {
       NS: "Hamburg Hbf",
       DB: "8002549",
+      SBB: "8002549",
     },
   },
   "hannover-hbf": {
@@ -214,6 +231,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     providerIds: {
       NS: "Hannover Hbf",
       DB: "8000152",
+      SBB: "8000152",
     },
   },
   "oberhausen-hbf": {
@@ -224,6 +242,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     providerIds: {
       NS: "Oberhausen Hbf",
       DB: "8000286",
+      SBB: "8000286",
     },
   },
   "emmerich": {
@@ -234,6 +253,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     providerIds: {
       NS: "Emmerich",
       DB: "8001843",
+      SBB: "8001843",
     },
   },
 
@@ -246,6 +266,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     country: "CH",
     coordinates: { lat: 47.3779, lng: 8.5402 },
     providerIds: {
+      NS: "Zürich HB",
       SBB: "8503000",
       DB: "8503000",
     },
@@ -256,6 +277,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     country: "CH",
     coordinates: { lat: 47.5474, lng: 7.5896 },
     providerIds: {
+      NS: "Basel SBB",
       SBB: "8500010",
       DB: "8500010",
     },
@@ -266,6 +288,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     country: "CH",
     coordinates: { lat: 46.9480, lng: 7.4474 },
     providerIds: {
+      NS: "Bern",
       SBB: "8507000",
       DB: "8507000",
     },
@@ -276,6 +299,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     country: "CH",
     coordinates: { lat: 46.2101, lng: 6.1423 },
     providerIds: {
+      NS: "Genève",
       SBB: "8501008",
       DB: "8501008",
     },
@@ -286,6 +310,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     country: "CH",
     coordinates: { lat: 46.5168, lng: 6.6291 },
     providerIds: {
+      NS: "Lausanne",
       SBB: "8501120",
       DB: "8501120",
     },
@@ -296,6 +321,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     country: "CH",
     coordinates: { lat: 47.0502, lng: 8.3093 },
     providerIds: {
+      NS: "Luzern",
       SBB: "8505000",
       DB: "8505000",
     },
