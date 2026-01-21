@@ -100,9 +100,12 @@ Update [`stationRegistry.ts`](trainy-web/src/data/stationRegistry.ts) to add SBB
 
 **Switzerland stations** - Add NS provider IDs (NS uses station names for international):
 
-- Zurich HB: NS uses `"Zürich HB"` (name-based lookup)
-- Basel SBB: NS uses `"Basel SBB"`
-- Note: validate name-based lookup with NS API when a key is available.
+NS API validation (with key) results:
+
+- Zurich HB: NS station code `ZUE` works with `/v3/trips`.
+- Basel SBB: NS station code `BASELS` works with `/v3/trips`.
+- Bern / Genève / Lausanne / Luzern: name-based lookups return `400 Bad Request` in `/v3/trips`.
+  - Leave NS IDs unset for these to avoid failing NS queries.
 
 ### 3. Verify Provider Querying Works
 

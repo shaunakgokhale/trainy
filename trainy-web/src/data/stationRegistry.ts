@@ -250,7 +250,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     country: "CH",
     coordinates: { lat: 47.3779, lng: 8.5402 },
     providerIds: {
-      NS: "Zürich HB",
+      NS: "ZUE",
       SBB: "8503000",
       DB: "8503000",
     },
@@ -261,7 +261,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     country: "CH",
     coordinates: { lat: 47.5474, lng: 7.5896 },
     providerIds: {
-      NS: "Basel SBB",
+      NS: "BASELS",
       SBB: "8500010",
       DB: "8500010",
     },
@@ -272,7 +272,6 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     country: "CH",
     coordinates: { lat: 46.9480, lng: 7.4474 },
     providerIds: {
-      NS: "Bern",
       SBB: "8507000",
       DB: "8507000",
     },
@@ -283,7 +282,6 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     country: "CH",
     coordinates: { lat: 46.2101, lng: 6.1423 },
     providerIds: {
-      NS: "Genève",
       SBB: "8501008",
       DB: "8501008",
     },
@@ -294,7 +292,6 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     country: "CH",
     coordinates: { lat: 46.5168, lng: 6.6291 },
     providerIds: {
-      NS: "Lausanne",
       SBB: "8501120",
       DB: "8501120",
     },
@@ -305,7 +302,6 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     country: "CH",
     coordinates: { lat: 47.0502, lng: 8.3093 },
     providerIds: {
-      NS: "Luzern",
       SBB: "8505000",
       DB: "8505000",
     },
