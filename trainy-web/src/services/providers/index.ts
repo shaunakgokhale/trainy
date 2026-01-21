@@ -7,6 +7,7 @@
 import type { TrainProvider, ProviderID, CountryCode } from "./types";
 import { nsProvider } from "./nsProvider";
 import { dbProvider } from "./dbProvider";
+import { sbbProvider } from "./sbbProvider";
 
 // =============================================================================
 // Provider Registry
@@ -20,7 +21,7 @@ const PROVIDERS: Record<ProviderID, TrainProvider | null> = {
   DB: dbProvider,
   SNCF: null, // Future implementation
   OBB: null, // Future implementation
-  SBB: null, // Future implementation
+  SBB: sbbProvider,
 };
 
 /**
@@ -99,4 +100,5 @@ export function getProvidersForStation(
 
 export { nsProvider } from "./nsProvider";
 export { dbProvider } from "./dbProvider";
+export { sbbProvider } from "./sbbProvider";
 export * from "./types";

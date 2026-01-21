@@ -27,7 +27,7 @@ Trainy uses a 3-layer architecture for international train search:
 | DB (Deutsche Bahn) | Germany | ✅ Active | `dbApi.ts`, `dbProvider.ts` |
 | SNCF | France | 🔜 Planned | - |
 | OBB | Austria | 🔜 Planned | - |
-| SBB | Switzerland | 🔜 Planned | - |
+| SBB | Switzerland | ✅ Active | `sbbApi.ts`, `sbbProvider.ts` |
 
 ---
 
@@ -166,6 +166,39 @@ Proxy config in `vite.config.ts` injects auth headers.
 
 ---
 
+## SBB API (Switzerland)
+
+**Provider:** `src/services/providers/sbbProvider.ts`  
+**Low-level API:** `src/services/sbbApi.ts`
+
+### Authentication
+
+No authentication required. The API is rate limited by IP.
+
+### Base URL
+
+```
+https://transport.opendata.ch/v1
+```
+
+### Endpoints
+
+| Function | Endpoint | Purpose |
+|----------|----------|---------|
+| `searchStations(query)` | `GET /locations?query={query}&type=station` | Search stations by name |
+| `searchJourneys(params)` | `GET /connections?from={id}&to={id}&date=YYYY-MM-DD&time=HH:MM` | Find journeys between stations |
+
+### Key Quirks
+
+- Coordinates use `x` for latitude and `y` for longitude
+- Duration uses `00d00:43:00` format (days/hours/minutes/seconds)
+- CORS is enabled (no proxy needed)
+- Station IDs are 7-digit UIC codes (compatible with DB EVA numbers)
+
+Reference: https://transport.opendata.ch/docs.html
+
+---
+
 ## Station Registry
 
 Unified station definitions with cross-provider mappings:
@@ -255,6 +288,7 @@ const STATION_ALIASES = {
 | sources | text[] | ["NS", "DB"] - which APIs contributed |
 | ns_raw_id | text | Original NS journey ID |
 | db_raw_id | text | Original DB journey ID |
+| sbb_raw_id | text | Original SBB journey ID |
 
 **Table: `journey_stops`**
 
@@ -367,7 +401,7 @@ VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
 // Provider identifiers
 type ProviderID = "NS" | "DB" | "SNCF" | "OBB" | "SBB";
 type CountryCode = "NL" | "DE" | "FR" | "AT" | "CH" | "BE";
-type ApiSource = "NS" | "DB" | "SNCF" | "merged";
+type ApiSource = "NS" | "DB" | "SNCF" | "SBB" | "merged";
 
 // Station from registry
 interface UnifiedStation {
@@ -394,6 +428,7 @@ interface StoredJourney {
   durationMinutes: number;
   status: JourneyStatus;
   sources: ApiSource[];
+  sbbRawId?: string;
   stops: StoredJourneyStop[];
   createdAt: string;
   updatedAt: string;

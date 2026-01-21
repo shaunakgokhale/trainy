@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import * as nsApi from "../services/nsApi";
 import * as dbApi from "../services/dbApi";
+import * as sbbApi from "../services/sbbApi";
 import * as internationalApi from "../services/internationalApi";
 import type { Journey, Station, MergedJourneyStop, StoredJourney } from "../types/train";
 import type { UnifiedStation } from "../data/stationRegistry";
@@ -8,7 +9,7 @@ import { DBJourneySearchPanel } from "../components/DBJourneySearchPanel";
 import { DBJourneyResults } from "../components/DBJourneyResults";
 import { DBJourneyDetail } from "../components/DBJourneyDetail";
 
-type TabId = "ns" | "db" | "international";
+type TabId = "ns" | "db" | "sbb" | "international";
 
 type TestResult<T> = {
   data: T | null;
@@ -304,6 +305,218 @@ function NSApiTest() {
         </div>
         <CollapsibleJson json={journeyResult.rawJson} />
       </section>
+    </div>
+  );
+}
+
+function SBBApiTest() {
+  const [stationQuery, setStationQuery] = useState("Zürich HB");
+  const [stationResult, setStationResult] = useState<TestResult<Station[]>>({
+    data: null,
+    error: null,
+    loading: false,
+    timestamp: null,
+    rawJson: null,
+  });
+
+  const [fromStation, setFromStation] = useState("Zürich HB");
+  const [toStation, setToStation] = useState("Bern");
+  const [dateTime, setDateTime] = useState(
+    new Date().toISOString().slice(0, 16)
+  );
+  const [journeyResult, setJourneyResult] = useState<TestResult<Journey[]>>({
+    data: null,
+    error: null,
+    loading: false,
+    timestamp: null,
+    rawJson: null,
+  });
+  const [selectedJourney, setSelectedJourney] = useState<Journey | null>(null);
+
+  const handleSearchStations = async () => {
+    setStationResult({
+      data: null,
+      error: null,
+      loading: true,
+      timestamp: null,
+      rawJson: null,
+    });
+    const ts = getTimestamp();
+    console.log(`[APITestPage][${ts}] SBB Station Search: "${stationQuery}"`);
+
+    try {
+      const stations = await sbbApi.searchStations(stationQuery);
+      console.log(`[APITestPage][${ts}] SBB Stations Result:`, stations);
+      setStationResult({
+        data: stations,
+        error: null,
+        loading: false,
+        timestamp: ts,
+        rawJson: JSON.stringify(stations, null, 2),
+      });
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : "Unknown error";
+      console.error(`[APITestPage][${ts}] SBB Stations Error:`, err);
+      setStationResult({
+        data: null,
+        error: errorMsg,
+        loading: false,
+        timestamp: ts,
+        rawJson: null,
+      });
+    }
+  };
+
+  const handleSearchJourneys = async () => {
+    setJourneyResult({
+      data: null,
+      error: null,
+      loading: true,
+      timestamp: null,
+      rawJson: null,
+    });
+    setSelectedJourney(null);
+    const ts = getTimestamp();
+    console.log(
+      `[APITestPage][${ts}] SBB Journey Search: ${fromStation} → ${toStation} @ ${dateTime}`
+    );
+
+    try {
+      const journeys = await sbbApi.searchJourneys({
+        from: fromStation,
+        to: toStation,
+        dateTime: new Date(dateTime).toISOString(),
+      });
+      console.log(`[APITestPage][${ts}] SBB Journeys Result:`, journeys);
+      setJourneyResult({
+        data: journeys,
+        error: null,
+        loading: false,
+        timestamp: ts,
+        rawJson: JSON.stringify(journeys, null, 2),
+      });
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : "Unknown error";
+      console.error(`[APITestPage][${ts}] SBB Journeys Error:`, err);
+      setJourneyResult({
+        data: null,
+        error: errorMsg,
+        loading: false,
+        timestamp: ts,
+        rawJson: null,
+      });
+    }
+  };
+
+  const handleSelectJourney = (journey: Journey) => {
+    setSelectedJourney(journey);
+  };
+
+  const closeJourneyDetail = () => {
+    setSelectedJourney(null);
+  };
+
+  return (
+    <div className="space-y-8">
+      {/* Station Search */}
+      <section className="rounded border bg-white p-4">
+        <h3 className="mb-3 font-semibold">Station Search</h3>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={stationQuery}
+            onChange={(e) => setStationQuery(e.target.value)}
+            placeholder="Station name..."
+            className="flex-1 rounded border px-3 py-2 text-sm"
+          />
+          <button
+            onClick={handleSearchStations}
+            disabled={stationResult.loading}
+            className="rounded bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {stationResult.loading ? <LoadingSpinner /> : "Search SBB Stations"}
+          </button>
+        </div>
+        {stationResult.timestamp && (
+          <p className="mt-2 text-xs text-gray-400">
+            Tested at: {stationResult.timestamp}
+          </p>
+        )}
+        <div className="mt-3">
+          {stationResult.error && <ErrorDisplay error={stationResult.error} />}
+          {stationResult.data && <StationList stations={stationResult.data} />}
+        </div>
+        <CollapsibleJson json={stationResult.rawJson} />
+      </section>
+
+      {/* Journey Search */}
+      <section className="rounded border bg-white p-4">
+        <h3 className="mb-3 font-semibold">Journey Search</h3>
+        <div className="grid gap-2 sm:grid-cols-3">
+          <input
+            type="text"
+            value={fromStation}
+            onChange={(e) => setFromStation(e.target.value)}
+            placeholder="From station..."
+            className="rounded border px-3 py-2 text-sm"
+          />
+          <input
+            type="text"
+            value={toStation}
+            onChange={(e) => setToStation(e.target.value)}
+            placeholder="To station..."
+            className="rounded border px-3 py-2 text-sm"
+          />
+          <input
+            type="datetime-local"
+            value={dateTime}
+            onChange={(e) => setDateTime(e.target.value)}
+            className="rounded border px-3 py-2 text-sm"
+          />
+        </div>
+        <button
+          onClick={handleSearchJourneys}
+          disabled={journeyResult.loading}
+          className="mt-2 rounded bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
+        >
+          {journeyResult.loading ? <LoadingSpinner /> : "Search SBB Journeys"}
+        </button>
+        {journeyResult.timestamp && (
+          <p className="mt-2 text-xs text-gray-400">
+            Tested at: {journeyResult.timestamp}
+          </p>
+        )}
+        <div className="mt-3">
+          {journeyResult.error && <ErrorDisplay error={journeyResult.error} />}
+          {journeyResult.data && journeyResult.data.length > 0 && !selectedJourney && (
+            <SBBJourneyList journeys={journeyResult.data} onSelect={handleSelectJourney} />
+          )}
+        </div>
+        <CollapsibleJson json={journeyResult.rawJson} />
+      </section>
+
+      {journeyResult.data && journeyResult.data.length === 0 && !selectedJourney && (
+        <div className="rounded bg-yellow-50 p-4 text-sm text-yellow-800">
+          No journeys found for this route. Try adjusting the date/time or station names.
+        </div>
+      )}
+
+      {selectedJourney && (
+        <section className="rounded border bg-white p-4">
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="font-semibold">
+              Journey Details: {selectedJourney.trainType} {selectedJourney.trainNumber}
+            </h3>
+            <button
+              onClick={closeJourneyDetail}
+              className="rounded bg-gray-100 px-3 py-1 text-sm text-gray-600 hover:bg-gray-200"
+            >
+              ← Back to Results
+            </button>
+          </div>
+          <SBBJourneyDetailView journey={selectedJourney} />
+        </section>
+      )}
     </div>
   );
 }
@@ -806,6 +1019,221 @@ function InternationalJourneyList({
   );
 }
 
+function SBBJourneyList({
+  journeys,
+  onSelect,
+}: {
+  journeys: Journey[];
+  onSelect: (journey: Journey) => void;
+}) {
+  return (
+    <ul className="space-y-2">
+      {journeys.map((journey, idx) => {
+        const originStop = journey.stops[0];
+        const destStop = journey.stops[journey.stops.length - 1];
+
+        return (
+          <li
+            key={`${journey.id}-${idx}`}
+            onClick={() => onSelect(journey)}
+            className="cursor-pointer rounded border bg-gray-50 p-3 transition-colors hover:border-purple-300 hover:bg-purple-50"
+          >
+            <div className="flex items-start justify-between">
+              <div>
+                <span className="font-medium">
+                  {journey.trainType} {journey.trainNumber}
+                </span>
+                <span className="ml-2 text-sm text-gray-500">{journey.operator}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="rounded bg-blue-100 px-2 py-0.5 text-xs text-blue-700">
+                  SBB
+                </span>
+                <span
+                  className={`rounded px-2 py-0.5 text-xs ${
+                    journey.status === "cancelled"
+                      ? "bg-red-200 text-red-800"
+                      : journey.status === "delayed"
+                        ? "bg-yellow-200 text-yellow-800"
+                        : "bg-green-200 text-green-800"
+                  }`}
+                >
+                  {journey.status}
+                </span>
+              </div>
+            </div>
+
+            <div className="mt-2 flex items-center text-sm">
+              <div className="flex-1">
+                <div className="font-medium">{journey.departure.station.name}</div>
+                <div className="text-gray-500">
+                  {formatTime(journey.departure.scheduledDeparture)}
+                  {originStop?.plannedPlatform && (
+                    <span className="ml-2">
+                      Platform {originStop.actualPlatform ?? originStop.plannedPlatform}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="px-4 text-center text-gray-400">
+                <div className="text-xs">{journey.duration} min</div>
+                <div className="text-lg">→</div>
+              </div>
+              <div className="flex-1 text-right">
+                <div className="font-medium">{journey.arrival.station.name}</div>
+                <div className="text-gray-500">
+                  {formatTime(journey.arrival.scheduledArrival)}
+                  {destStop?.plannedPlatform && (
+                    <span className="ml-2">
+                      Platform {destStop.actualPlatform ?? destStop.plannedPlatform}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function SBBJourneyDetailView({ journey }: { journey: Journey }) {
+  const stops = journey.stops ?? [];
+
+  return (
+    <div>
+      {/* Journey summary */}
+      <div className="mb-4 rounded bg-gray-50 p-3">
+        <div className="grid gap-4 md:grid-cols-4">
+          <div>
+            <div className="text-xs text-gray-500">Train</div>
+            <div className="font-medium">
+              {journey.trainType} {journey.trainNumber}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-500">Operator</div>
+            <div className="font-medium">{journey.operator}</div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-500">Duration</div>
+            <div className="font-medium">{journey.duration} minutes</div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-500">Status</div>
+            <div
+              className={`inline-block rounded px-2 py-0.5 text-sm font-medium ${
+                journey.status === "cancelled"
+                  ? "bg-red-100 text-red-700"
+                  : journey.status === "delayed"
+                    ? "bg-yellow-100 text-yellow-700"
+                    : "bg-green-100 text-green-700"
+              }`}
+            >
+              {journey.status}
+            </div>
+          </div>
+        </div>
+        <div className="mt-2 text-xs text-gray-500">Data sources: SBB</div>
+      </div>
+
+      {/* Stops timeline */}
+      <div className="mb-4">
+        <h4 className="mb-2 text-sm font-semibold">Route & Stops</h4>
+        {stops.length === 0 ? (
+          <p className="text-sm text-gray-500">No detailed stop information available.</p>
+        ) : null}
+      </div>
+
+      <div className="relative">
+        {/* Timeline line */}
+        <div className="absolute left-4 top-2 h-[calc(100%-16px)] w-0.5 bg-gray-200" />
+
+        {/* All stops in sequence */}
+        {stops.map((stop, idx) => (
+          <SBBStopItem
+            key={`${stop.station.code}-${idx}`}
+            stop={stop}
+            type={idx === 0 ? "departure" : idx === stops.length - 1 ? "arrival" : "intermediate"}
+            isFirst={idx === 0}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SBBStopItem({
+  stop,
+  type,
+  isFirst,
+}: {
+  stop: JourneyStop;
+  type: "departure" | "intermediate" | "arrival";
+  isFirst: boolean;
+}) {
+  const time =
+    type === "departure" ? stop.scheduledDeparture : stop.scheduledArrival;
+  const delay =
+    type === "departure" ? stop.departureDelay : stop.arrivalDelay;
+
+  return (
+    <div className={`relative flex items-start gap-4 ${isFirst ? "" : "mt-3"}`}>
+      {/* Timeline dot */}
+      <div
+        className={`relative z-10 flex h-8 w-8 items-center justify-center rounded-full ${
+          type === "departure"
+            ? "bg-green-500 text-white"
+            : type === "arrival"
+              ? "bg-red-500 text-white"
+              : "bg-white border-2 border-gray-300"
+        }`}
+      >
+        {type === "departure" && "↑"}
+        {type === "arrival" && "↓"}
+        {type === "intermediate" && "•"}
+      </div>
+
+      {/* Stop info */}
+      <div className="flex-1 pb-2">
+        <div className="flex items-start justify-between">
+          <div>
+            <div className="font-medium">{stop.station.name}</div>
+            <div className="text-xs text-gray-500">
+              {stop.station.country} • via SBB API
+            </div>
+          </div>
+          <div className="text-right">
+            <div className="font-medium">{formatTime(time)}</div>
+            {delay && delay > 0 && <div className="text-xs text-red-600">+{delay} min</div>}
+          </div>
+        </div>
+
+        {/* Platform info */}
+        {(stop.plannedPlatform || stop.actualPlatform || stop.platform) && (
+          <div className="mt-1 inline-block rounded bg-blue-100 px-2 py-0.5 text-xs text-blue-700">
+            Platform {stop.actualPlatform ?? stop.plannedPlatform ?? stop.platform}
+            {stop.plannedPlatform &&
+              stop.actualPlatform &&
+              stop.plannedPlatform !== stop.actualPlatform && (
+                <span className="ml-1 text-orange-600">
+                  (was {stop.plannedPlatform})
+                </span>
+              )}
+          </div>
+        )}
+
+        {stop.cancelled && (
+          <div className="mt-1 inline-block rounded bg-red-100 px-2 py-0.5 text-xs text-red-700">
+            Cancelled
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // Journey detail view with all stops
 function JourneyDetailView({ journey }: { journey: StoredJourney }) {
   const stops = journey.stops ?? [];
@@ -1229,12 +1657,23 @@ export default function APITestPage() {
         >
           DB API (Germany)
         </button>
+        <button
+          onClick={() => setActiveTab("sbb")}
+          className={`px-4 py-2 text-sm font-medium ${
+            activeTab === "sbb"
+              ? "border-b-2 border-blue-600 text-blue-600"
+              : "text-gray-500 hover:text-gray-700"
+          }`}
+        >
+          SBB API (Switzerland)
+        </button>
       </div>
 
       {/* Tab Content */}
       {activeTab === "international" && <InternationalApiTest />}
       {activeTab === "ns" && <NSApiTest />}
       {activeTab === "db" && <DBApiTest />}
+      {activeTab === "sbb" && <SBBApiTest />}
     </div>
   );
 }

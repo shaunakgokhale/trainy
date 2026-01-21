@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS journeys (
     sources TEXT[] NOT NULL DEFAULT '{}',
     ns_raw_id TEXT,
     db_raw_id TEXT,
+    sbb_raw_id TEXT,
     
     -- Timestamps
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

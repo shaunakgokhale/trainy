@@ -238,6 +238,70 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
   },
 
   // ---------------------------------------------------------------------------
+  // Switzerland (CH)
+  // ---------------------------------------------------------------------------
+  "zurich-hb": {
+    id: "zurich-hb",
+    displayName: "Zürich HB",
+    country: "CH",
+    coordinates: { lat: 47.3779, lng: 8.5402 },
+    providerIds: {
+      SBB: "8503000",
+      DB: "8503000",
+    },
+  },
+  "basel-sbb": {
+    id: "basel-sbb",
+    displayName: "Basel SBB",
+    country: "CH",
+    coordinates: { lat: 47.5474, lng: 7.5896 },
+    providerIds: {
+      SBB: "8500010",
+      DB: "8500010",
+    },
+  },
+  "bern-hb": {
+    id: "bern-hb",
+    displayName: "Bern",
+    country: "CH",
+    coordinates: { lat: 46.9480, lng: 7.4474 },
+    providerIds: {
+      SBB: "8507000",
+      DB: "8507000",
+    },
+  },
+  "geneve-cornavin": {
+    id: "geneve-cornavin",
+    displayName: "Genève",
+    country: "CH",
+    coordinates: { lat: 46.2101, lng: 6.1423 },
+    providerIds: {
+      SBB: "8501008",
+      DB: "8501008",
+    },
+  },
+  "lausanne": {
+    id: "lausanne",
+    displayName: "Lausanne",
+    country: "CH",
+    coordinates: { lat: 46.5168, lng: 6.6291 },
+    providerIds: {
+      SBB: "8501120",
+      DB: "8501120",
+    },
+  },
+  "luzern": {
+    id: "luzern",
+    displayName: "Luzern",
+    country: "CH",
+    coordinates: { lat: 47.0502, lng: 8.3093 },
+    providerIds: {
+      SBB: "8505000",
+      DB: "8505000",
+    },
+  },
+
+  // ---------------------------------------------------------------------------
   // France (FR) - Stubs for future SNCF integration
   // ---------------------------------------------------------------------------
   "paris-nord": {

@@ -10,7 +10,7 @@ Trainy is a web app that searches and tracks train journeys across European rail
 
 ## Features
 
-- Search stations across Netherlands, Germany, France
+- Search stations across Netherlands, Germany, Switzerland, France
 - Find cross-border journeys with merged data from multiple APIs
 - View journey details with all intermediate stops
 - Track real-time delays and platform changes
@@ -36,7 +36,7 @@ Trainy is a web app that searches and tracks train journeys across European rail
 - **Frontend:** React 18 + Vite + TypeScript
 - **Styling:** TailwindCSS
 - **Database:** Supabase (PostgreSQL)
-- **APIs:** NS (Netherlands), DB (Germany), SNCF (France - planned)
+- **APIs:** NS (Netherlands), DB (Germany), SBB (Switzerland), SNCF (France - planned)
 
 ## Getting Started
 
@@ -150,11 +150,11 @@ See [docs/adding-providers.md](docs/adding-providers.md) for detailed instructio
 
 - ✅ NS API (Netherlands) - Fully integrated
 - ✅ DB API (Germany) - Fully integrated
+- ✅ SBB API (Switzerland) - Fully integrated
 - ✅ Supabase storage - Journey persistence
 - ✅ Cross-border merging - Amsterdam → Frankfurt works
 - 🔜 SNCF API (France) - Planned
 - 🔜 OBB API (Austria) - Planned
-- 🔜 SBB API (Switzerland) - Planned
 
 ## Contributing
 

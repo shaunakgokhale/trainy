@@ -26,7 +26,7 @@ export type JourneyStatus =
   | "departed"
   | "arrived";
 
-export type ApiSource = "NS" | "DB" | "SNCF" | "merged";
+export type ApiSource = "NS" | "DB" | "SNCF" | "SBB" | "merged";
 
 export type Journey = {
   id: string;
@@ -147,6 +147,7 @@ export type StoredJourney = {
   /** Original API journey IDs for refresh */
   nsRawId?: string;
   dbRawId?: string;
+  sbbRawId?: string;
   /** All stops on this journey */
   stops: StoredJourneyStop[];
   /** Timestamps */

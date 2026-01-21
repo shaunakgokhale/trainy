@@ -311,6 +311,8 @@ async function refreshJourneyRealtime(
         providerJourneyId = `${journey.trainNumber}_${journey.scheduledDeparture}`;
       } else if (sourceId === "DB" && journey.dbRawId) {
         providerJourneyId = journey.dbRawId;
+      } else if (sourceId === "SBB" && journey.sbbRawId) {
+        providerJourneyId = journey.sbbRawId;
       }
 
       if (!providerJourneyId) continue;
@@ -374,6 +376,7 @@ interface MergedJourneyData {
   sources: ProviderID[];
   nsRawId?: string;
   dbRawId?: string;
+  sbbRawId?: string;
 }
 
 /**
@@ -409,6 +412,7 @@ function mergeJourneys(
         sources: [source],
         nsRawId: source === "NS" ? journey.id : undefined,
         dbRawId: source === "DB" ? journey.id : undefined,
+        sbbRawId: source === "SBB" ? journey.id : undefined,
       });
     }
   }
@@ -459,6 +463,8 @@ function mergeIntoExisting(
     existing.nsRawId = newJourney.id;
   } else if (newSource === "DB") {
     existing.dbRawId = newJourney.id;
+  } else if (newSource === "SBB") {
+    existing.sbbRawId = newJourney.id;
   }
 
   // Field priority: origin country provider authoritative for departure
@@ -556,6 +562,7 @@ function toStoredJourneyInput(
     sources: merged.sources as ApiSource[],
     nsRawId: merged.nsRawId,
     dbRawId: merged.dbRawId,
+    sbbRawId: merged.sbbRawId,
     stops,
   };
 }

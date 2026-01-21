@@ -158,6 +158,22 @@ export const STATION_ALIASES: Record<string, string> = {
   "gare de l'est": "paris-est",
 
   // ---------------------------------------------------------------------------
+  // Switzerland
+  // ---------------------------------------------------------------------------
+  zurich: "zurich-hb",
+  "zürich": "zurich-hb",
+  "zurich hb": "zurich-hb",
+  "zürich hb": "zurich-hb",
+  basel: "basel-sbb",
+  "basel sbb": "basel-sbb",
+  bern: "bern-hb",
+  geneva: "geneve-cornavin",
+  "genève": "geneve-cornavin",
+  "geneve cornavin": "geneve-cornavin",
+  lausanne: "lausanne",
+  luzern: "luzern",
+
+  // ---------------------------------------------------------------------------
   // Belgium
   // ---------------------------------------------------------------------------
   bruxelles: "bruxelles-midi",

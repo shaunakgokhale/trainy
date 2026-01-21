@@ -43,6 +43,7 @@ function rowToStoredJourney(row: JourneyRow, stops: JourneyStopRow[]): StoredJou
     sources: row.sources as ApiSource[],
     nsRawId: row.ns_raw_id ?? undefined,
     dbRawId: row.db_raw_id ?? undefined,
+    sbbRawId: row.sbb_raw_id ?? undefined,
     stops: stops.map(rowToStoredJourneyStop).sort((a, b) => a.sequence - b.sequence),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -91,6 +92,7 @@ function inputToJourneyInsert(input: StoredJourneyInput): JourneyInsert {
     sources: input.sources,
     ns_raw_id: input.nsRawId ?? null,
     db_raw_id: input.dbRawId ?? null,
+    sbb_raw_id: input.sbbRawId ?? null,
   };
 }
 

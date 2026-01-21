@@ -32,6 +32,7 @@ export interface Database {
           sources: string[];
           ns_raw_id: string | null;
           db_raw_id: string | null;
+          sbb_raw_id: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -52,6 +53,7 @@ export interface Database {
           sources: string[];
           ns_raw_id?: string | null;
           db_raw_id?: string | null;
+          sbb_raw_id?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -72,6 +74,7 @@ export interface Database {
           sources?: string[];
           ns_raw_id?: string | null;
           db_raw_id?: string | null;
+          sbb_raw_id?: string | null;
           created_at?: string;
           updated_at?: string;
         };
