@@ -78,10 +78,11 @@ Update [`stationRegistry.ts`](trainy-web/src/data/stationRegistry.ts) to add SBB
 - Utrecht Centraal: SBB uses `8400621`
 - etc.
 
-**Germany stations** - Verify/add SBB UIC codes:
+**Germany stations** - Verify/add SBB location IDs (may differ from DB EVA codes):
 
-- Frankfurt Hbf: `8000105`
-- Koln Hbf: `8000207`
+- Frankfurt (Main) Hbf: `8011068` (SBB locations ID)
+- Köln Hbf: `8015458` (SBB locations ID)
+- München Hbf: `8020347` (SBB locations ID)
 - etc.
 
 **Switzerland stations** - Add NS provider IDs (NS uses station names for international):
