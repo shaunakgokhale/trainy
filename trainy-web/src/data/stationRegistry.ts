@@ -40,6 +40,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     providerIds: {
       NS: "ASD",
       DB: "8400058",
+      SBB: "8400058",
     },
   },
   "amsterdam-zuid": {
@@ -124,6 +125,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     providerIds: {
       NS: "Frankfurt (Main) Hbf",
       DB: "8000105",
+      SBB: "8011068",
     },
   },
   "koln-hbf": {
@@ -134,6 +136,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     providerIds: {
       NS: "Köln Hbf",
       DB: "8000207",
+      SBB: "8015458",
     },
   },
   "dusseldorf-hbf": {
@@ -194,6 +197,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     providerIds: {
       NS: "München Hbf",
       DB: "8000261",
+      SBB: "8020347",
     },
   },
   "hamburg-hbf": {
@@ -246,6 +250,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     country: "CH",
     coordinates: { lat: 47.3779, lng: 8.5402 },
     providerIds: {
+      NS: "ZUE",
       SBB: "8503000",
       DB: "8503000",
     },
@@ -256,6 +261,7 @@ export const STATION_REGISTRY: Record<string, UnifiedStation> = {
     country: "CH",
     coordinates: { lat: 47.5474, lng: 7.5896 },
     providerIds: {
+      NS: "BASELS",
       SBB: "8500010",
       DB: "8500010",
     },

@@ -68,6 +68,19 @@ Fetch UIC codes from SBB API for all German and Swiss stations:
 - Use `transport.opendata.ch/v1/locations?query={stationName}` to look up each station
 - Document the UIC codes found for each station
 
+#### Research notes (SBB locations)
+
+Verified SBB location IDs using the `connections` endpoint (response `from` not null):
+
+- Amsterdam Centraal: `8400058`
+- Frankfurt (Main) Hbf: `8011068`
+- Köln Hbf: `8015458`
+- München Hbf: `8020347`
+
+Notes:
+- DB/EVA codes for other NL/DE stations (e.g., `8400621`, `8000085`) did not resolve in SBB `connections` responses.
+- Only keep `SBB` IDs in the registry when SBB recognizes them.
+
 ### 2. Update Station Registry with UIC Codes
 
 Update [`stationRegistry.ts`](trainy-web/src/data/stationRegistry.ts) to add SBB provider IDs:
@@ -78,16 +91,21 @@ Update [`stationRegistry.ts`](trainy-web/src/data/stationRegistry.ts) to add SBB
 - Utrecht Centraal: SBB uses `8400621`
 - etc.
 
-**Germany stations** - Verify/add SBB UIC codes:
+**Germany stations** - Verify/add SBB location IDs (may differ from DB EVA codes):
 
-- Frankfurt Hbf: `8000105`
-- Koln Hbf: `8000207`
+- Frankfurt (Main) Hbf: `8011068` (SBB locations ID)
+- Köln Hbf: `8015458` (SBB locations ID)
+- München Hbf: `8020347` (SBB locations ID)
 - etc.
 
 **Switzerland stations** - Add NS provider IDs (NS uses station names for international):
 
-- Zurich HB: NS uses `"Zürich HB"` (name-based lookup)
-- Basel SBB: NS uses `"Basel SBB"`
+NS API validation (with key) results:
+
+- Zurich HB: NS station code `ZUE` works with `/v3/trips`.
+- Basel SBB: NS station code `BASELS` works with `/v3/trips`.
+- Bern / Genève / Lausanne / Luzern: name-based lookups return `400 Bad Request` in `/v3/trips`.
+  - Leave NS IDs unset for these to avoid failing NS queries.
 
 ### 3. Verify Provider Querying Works
 
