@@ -17,6 +17,8 @@ export type JourneyStop = {
   departureDelay?: number;
   arrivalDelay?: number;
   cancelled?: boolean;
+  /** Optional: tracks which API provided data for this stop (used in enrichment) */
+  source?: "NS" | "DB" | "SNCF" | "SBB" | "merged";
 };
 
 export type JourneyStatus =

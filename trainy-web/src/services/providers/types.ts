@@ -35,6 +35,9 @@ export interface TrainProvider {
   /** Human-readable name for logging/UI */
   readonly name: string;
 
+  /** Whether this provider accepts station names in searchJourneys */
+  readonly supportsNameQuery?: boolean;
+
   /**
    * Search for stations by name query.
    * @param query - Search term (station name or partial name)
@@ -105,14 +108,21 @@ export interface ProviderResult<T> {
  * Error thrown by providers with additional context
  */
 export class ProviderError extends Error {
+  public readonly provider: ProviderID;
+  public readonly code?: string;
+  public readonly originalError?: unknown;
+
   constructor(
     message: string,
-    public readonly provider: ProviderID,
-    public readonly code?: string,
-    public readonly originalError?: unknown
+    provider: ProviderID,
+    code?: string,
+    originalError?: unknown
   ) {
     super(`[${provider}] ${message}`);
     this.name = "ProviderError";
+    this.provider = provider;
+    this.code = code;
+    this.originalError = originalError;
   }
 }
 

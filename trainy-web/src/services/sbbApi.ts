@@ -80,6 +80,16 @@ type SBBConnectionsResponse = {
   connections?: SBBConnectionRaw[];
 };
 
+type SBBStationboardEntryRaw = {
+  name?: string | null;
+  number?: string | number | null;
+  stop?: SBBStopRaw;
+};
+
+type SBBStationboardResponse = {
+  stationboard?: SBBStationboardEntryRaw[];
+};
+
 // =============================================================================
 // Logging Helpers
 // =============================================================================
@@ -323,6 +333,30 @@ export const searchJourneys = async (
     console.error(`[SBB API][${getTimestamp()}] searchJourneys error`, error);
     throw new Error("Failed to search journeys from SBB.");
   }
+};
+
+export const searchStationboard = async (params: {
+  station: string;
+  dateTime: string;
+  limit?: number;
+  type?: "arrival" | "departure";
+}): Promise<SBBStationboardEntryRaw[]> => {
+  const url = new URL(`${BASE_URL}/stationboard`);
+  url.searchParams.set("station", params.station);
+  url.searchParams.set("limit", `${params.limit ?? 40}`);
+  const isoDateTime = new Date(params.dateTime).toISOString();
+  url.searchParams.set("datetime", isoDateTime);
+  if (params.type) {
+    url.searchParams.set("type", params.type);
+  }
+  const { data } = await fetchJson<SBBStationboardResponse>(url.toString(), {
+    station: params.station,
+    limit: `${params.limit ?? 40}`,
+    datetime: isoDateTime,
+    type: params.type,
+  });
+  const entries = data.stationboard ?? [];
+  return entries;
 };
 
 export const getJourneyDetails = async (

@@ -16,6 +16,7 @@ class DBProvider implements TrainProvider {
   readonly id: ProviderID = "DB";
   readonly country: CountryCode = "DE";
   readonly name = "Deutsche Bahn";
+  readonly supportsNameQuery = false;
 
   /**
    * Search for stations using DB Timetables API

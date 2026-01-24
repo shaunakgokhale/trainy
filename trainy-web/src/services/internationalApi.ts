@@ -18,6 +18,7 @@ import {
   type ProviderID,
   type CountryCode,
 } from "./providers";
+import * as sbbApi from "./sbbApi";
 import {
   findStationsByName,
   getStationById,
@@ -110,17 +111,40 @@ export async function searchStations(query: string): Promise<UnifiedStation[]> {
       logInfo(`${provider} returned ${stations.length} stations`);
 
       for (const apiStation of stations) {
-        // Try to find existing registry station by provider ID
         const normalizedName = apiStation.name.toLowerCase().trim();
-        const existingStation = results.find(
+        const apiStationId = apiStation.code || apiStation.uicCode;
+
+        // Try to find existing station by:
+        // 1. Exact name match
+        // 2. Provider ID match (UIC code)
+        // 3. Fuzzy name match (core name without parenthetical variations)
+        let existingStation = results.find(
           (s) => s.displayName.toLowerCase().trim() === normalizedName
         );
+
+        // Try matching by provider ID (UIC code) - this catches cases like Frankfurt (M) vs Frankfurt (Main)
+        if (!existingStation && apiStationId) {
+          existingStation = results.find((s) => {
+            const existingProviderIds = Object.values(s.providerIds).filter(Boolean);
+            return existingProviderIds.includes(apiStationId);
+          });
+        }
+
+        // Try fuzzy name matching - strip parenthetical content and compare core names
+        if (!existingStation) {
+          const coreApiName = normalizedName.replace(/\s*\([^)]*\)\s*/g, " ").trim();
+          existingStation = results.find((s) => {
+            const coreExistingName = s.displayName.toLowerCase().replace(/\s*\([^)]*\)\s*/g, " ").trim();
+            return coreExistingName === coreApiName ||
+              coreExistingName.includes(coreApiName) ||
+              coreApiName.includes(coreExistingName);
+          });
+        }
 
         if (existingStation) {
           // Add provider ID to existing station if not present
           if (!existingStation.providerIds[provider as ProviderID]) {
-            existingStation.providerIds[provider as ProviderID] =
-              apiStation.code || apiStation.uicCode;
+            existingStation.providerIds[provider as ProviderID] = apiStationId;
           }
         } else {
           // Create new unified station from API result
@@ -133,7 +157,7 @@ export async function searchStations(query: string): Promise<UnifiedStation[]> {
                 ? { lat: apiStation.lat, lng: apiStation.lng }
                 : undefined,
             providerIds: {
-              [provider as ProviderID]: apiStation.code || apiStation.uicCode,
+              [provider as ProviderID]: apiStationId,
             },
           };
           seenIds.add(newStation.id);
@@ -145,9 +169,20 @@ export async function searchStations(query: string): Promise<UnifiedStation[]> {
     }
   }
 
-  // Sort by relevance (exact matches first)
+  // Sort by relevance:
+  // 1. Registry stations (more provider IDs) first
+  // 2. Exact prefix matches second
+  // 3. Alphabetical within groups
   const queryLower = query.toLowerCase();
   results.sort((a, b) => {
+    // Prioritize registry stations (those with more provider IDs)
+    const aProviderCount = Object.keys(a.providerIds).filter(k => a.providerIds[k as ProviderID]).length;
+    const bProviderCount = Object.keys(b.providerIds).filter(k => b.providerIds[k as ProviderID]).length;
+    if (aProviderCount !== bProviderCount) {
+      return bProviderCount - aProviderCount; // More providers = higher priority
+    }
+
+    // Then sort by exact prefix match
     const aExact = a.displayName.toLowerCase().startsWith(queryLower);
     const bExact = b.displayName.toLowerCase().startsWith(queryLower);
     if (aExact && !bExact) return -1;
@@ -210,6 +245,176 @@ export async function searchJourneys(
       });
 
       logInfo(`${provider.id} returned ${journeys.length} journeys`);
+      
+      // SBB Platform Enrichment: When NS returns journeys to Switzerland, 
+      // query SBB API for accurate Swiss platform information
+      if (provider.id === "NS" && toStation.providerIds.SBB && journeys.length > 0) {
+        logInfo("SBB Enrichment: Starting for Swiss destination", {
+          destination: toStation.displayName,
+          sbbId: toStation.providerIds.SBB,
+        });
+        
+        const firstJourney = journeys[0];
+        try {
+          const arrivalDateTime =
+            firstJourney.arrival.scheduledArrival ?? dateTime;
+
+          // Find Swiss stop - use case-insensitive comparison
+          const swissStop =
+            firstJourney.stops.find((stop) => 
+              stop.station.country?.toUpperCase() === "CH"
+            ) ?? null;
+          
+          logInfo("SBB Enrichment: Swiss stop search", {
+            found: !!swissStop,
+            stopName: swissStop?.station.name,
+            stopCountry: swissStop?.station.country,
+            allStopCountries: firstJourney.stops.map(s => s.station.country),
+          });
+          
+          if (swissStop) {
+            const registryMatches = findStationsByName(
+              swissStop.station.name ?? ""
+            );
+            const registryMatch = registryMatches[0] ?? null;
+            
+            logInfo("SBB Enrichment: Registry match", {
+              searchName: swissStop.station.name,
+              found: !!registryMatch,
+              registryName: registryMatch?.displayName,
+              sbbId: registryMatch?.providerIds.SBB,
+            });
+            
+            if (registryMatch?.providerIds.SBB && toStation.providerIds.SBB) {
+              try {
+                logInfo("SBB Enrichment: Querying SBB API", {
+                  from: registryMatch.providerIds.SBB,
+                  to: toStation.providerIds.SBB,
+                  dateTime: swissStop.scheduledDeparture ?? arrivalDateTime,
+                });
+                
+                const swissJourneys = await sbbApi.searchJourneys({
+                  from: registryMatch.providerIds.SBB,
+                  to: toStation.providerIds.SBB,
+                  dateTime: swissStop.scheduledDeparture ?? arrivalDateTime,
+                });
+                
+                logInfo("SBB Enrichment: SBB returned journeys", {
+                  count: swissJourneys.length,
+                  arrivals: swissJourneys.map(j => ({
+                    time: j.arrival.scheduledArrival,
+                    station: j.arrival.station.name,
+                    platform: j.arrival.platform,
+                    plannedPlatform: j.arrival.plannedPlatform,
+                    actualPlatform: j.arrival.actualPlatform,
+                  })),
+                });
+                
+                const baseArrivalTime = firstJourney.arrival.scheduledArrival;
+                const baseArrivalMillis = baseArrivalTime
+                  ? new Date(baseArrivalTime).getTime()
+                  : null;
+                const matchingSwissJourney = swissJourneys.find((journey) => {
+                  const swissArrivalTime = journey.arrival.scheduledArrival;
+                  if (!swissArrivalTime || !baseArrivalMillis) {
+                    return false;
+                  }
+                  const swissArrivalMillis = new Date(swissArrivalTime).getTime();
+                  const diffMinutes =
+                    Math.abs(swissArrivalMillis - baseArrivalMillis) / 60000;
+                  const destinationMatch =
+                    journey.arrival.station.name
+                      .toLowerCase()
+                      .includes(toStation.displayName.toLowerCase()) ||
+                    journey.arrival.station.code?.toLowerCase() ===
+                      toStation.id.toLowerCase();
+                  return diffMinutes <= 20 && destinationMatch;
+                });
+                
+                logInfo("SBB Enrichment: Journey matching", {
+                  baseArrival: baseArrivalTime,
+                  matchFound: !!matchingSwissJourney,
+                  matchedPlatform: matchingSwissJourney?.arrival.platform,
+                  matchedPlannedPlatform: matchingSwissJourney?.arrival.plannedPlatform,
+                });
+                
+                if (matchingSwissJourney) {
+                  const swissArrival = matchingSwissJourney.arrival;
+                  if (swissArrival.platform || swissArrival.plannedPlatform || swissArrival.actualPlatform) {
+                    logInfo("SBB Enrichment: Updating platform data", {
+                      platform: swissArrival.platform,
+                      plannedPlatform: swissArrival.plannedPlatform,
+                      actualPlatform: swissArrival.actualPlatform,
+                    });
+                    
+                    firstJourney.arrival = {
+                      ...firstJourney.arrival,
+                      platform: swissArrival.platform ?? firstJourney.arrival.platform,
+                      plannedPlatform:
+                        swissArrival.plannedPlatform ??
+                        firstJourney.arrival.plannedPlatform,
+                      actualPlatform:
+                        swissArrival.actualPlatform ??
+                        firstJourney.arrival.actualPlatform,
+                    };
+                    // Update matching stops with platform info and mark source as SBB
+                    let stopsUpdated = 0;
+                    for (const stop of firstJourney.stops) {
+                      const stopNameLower = stop.station.name.toLowerCase();
+                      const destNameLower = toStation.displayName.toLowerCase();
+                      // Use flexible matching: includes OR startsWith for partial matches
+                      const matches = stopNameLower.includes(destNameLower) || 
+                                     destNameLower.includes(stopNameLower) ||
+                                     stopNameLower.replace(/\s+/g, '').includes(destNameLower.replace(/\s+/g, ''));
+                      if (matches) {
+                        stop.platform = swissArrival.platform ?? stop.platform;
+                        stop.plannedPlatform =
+                          swissArrival.plannedPlatform ?? stop.plannedPlatform;
+                        stop.actualPlatform =
+                          swissArrival.actualPlatform ?? stop.actualPlatform;
+                        // Mark this stop as enriched by SBB
+                        stop.source = "SBB";
+                        stopsUpdated++;
+                      }
+                    }
+                    logInfo("SBB Enrichment: Updated stops with SBB source", { stopsUpdated });
+                  } else {
+                    logInfo("SBB Enrichment: No platform data in SBB response");
+                  }
+                } else {
+                  logInfo("SBB Enrichment: No matching SBB journey found");
+                }
+              } catch (error) {
+                logError("SBB Enrichment: SBB API call failed", error);
+              }
+            } else {
+              logInfo("SBB Enrichment: Registry match missing SBB ID", {
+                registryMatch: registryMatch?.displayName,
+                hasSbbId: !!registryMatch?.providerIds.SBB,
+              });
+            }
+          } else {
+            logInfo("SBB Enrichment: No Swiss stop found in journey");
+          }
+        } catch (err) {
+          logError("SBB Enrichment: Error during enrichment", err);
+        }
+      }
+      if (
+        journeys.length === 0 &&
+        provider.supportsNameQuery &&
+        provider.country !== fromStation.country
+      ) {
+        try {
+          await provider.searchJourneys({
+            from: fromStation.displayName,
+            to: toStation.displayName,
+            dateTime,
+          });
+        } catch {
+          // Ignore fallback errors
+        }
+      }
 
       for (const journey of journeys) {
         allJourneys.push({ source: provider.id, journey });
@@ -392,7 +597,40 @@ function mergeJourneys(
 
   for (const { source, journey } of journeys) {
     const key = generateMergeKey(journey);
-    const existing = byKey.get(key);
+    let existing = byKey.get(key);
+    if (!existing) {
+      const arrivalTime = journey.arrival.scheduledArrival;
+      if (journey.trainNumber && arrivalTime) {
+        const arrivalMillis = new Date(arrivalTime).getTime();
+        const destinationName = toStation.displayName.toLowerCase().trim();
+        const destinationId = toStation.id.toLowerCase().trim();
+        existing = Array.from(byKey.values()).find((candidate) => {
+          if (candidate.trainNumber !== journey.trainNumber) {
+            return false;
+          }
+          const candidateArrival = candidate.arrival.scheduledArrival;
+          if (!candidateArrival) {
+            return false;
+          }
+          const candidateArrivalMillis = new Date(candidateArrival).getTime();
+          const diffMinutes = Math.abs(candidateArrivalMillis - arrivalMillis) / 60000;
+          if (diffMinutes > 20) {
+            return false;
+          }
+          const candidateDestName = candidate.arrival.station.name
+            .toLowerCase()
+            .trim();
+          return (
+            candidateDestName === destinationName ||
+            candidateDestName.includes(destinationName) ||
+            candidate.arrival.station.code?.toLowerCase() === destinationId
+          );
+        });
+        if (existing) {
+          // Continue with merge using arrival match
+        }
+      }
+    }
 
     if (existing) {
       // Merge with existing
@@ -540,7 +778,8 @@ function toStoredJourneyInput(
       departureDelayMin: stop.departureDelay,
       plannedPlatform: stop.plannedPlatform,
       actualPlatform: stop.actualPlatform,
-      source: merged.sources[0] as ApiSource,
+      // Use stop's source if it was enriched by a specific API, otherwise use journey's primary source
+      source: (stop.source as ApiSource) ?? merged.sources[0] as ApiSource,
       cancelled: stop.cancelled ?? false,
     })
   );

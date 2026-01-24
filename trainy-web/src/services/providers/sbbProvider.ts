@@ -7,6 +7,7 @@ class SBBProvider implements TrainProvider {
   readonly id: ProviderID = "SBB";
   readonly country: CountryCode = "CH";
   readonly name = "Swiss Federal Railways";
+  readonly supportsNameQuery = true;
 
   async searchStations(query: string): Promise<Station[]> {
     console.log(`[SBBProvider] Searching stations: "${query}"`);

@@ -993,7 +993,7 @@ function InternationalJourneyList({
                 <div className="font-medium">{journey.originStationName}</div>
                 <div className="text-gray-500">
                   {formatTime(journey.scheduledDeparture)}
-                  {originStop?.plannedPlatform && (
+                  {(originStop?.plannedPlatform || originStop?.actualPlatform) && (
                     <span className="ml-2">Platform {originStop.actualPlatform ?? originStop.plannedPlatform}</span>
                   )}
                 </div>
@@ -1006,7 +1006,7 @@ function InternationalJourneyList({
                 <div className="font-medium">{journey.destinationStationName}</div>
                 <div className="text-gray-500">
                   {formatTime(journey.scheduledArrival)}
-                  {destStop?.plannedPlatform && (
+                  {(destStop?.plannedPlatform || destStop?.actualPlatform) && (
                     <span className="ml-2">Platform {destStop.actualPlatform ?? destStop.plannedPlatform}</span>
                   )}
                 </div>
@@ -1068,7 +1068,7 @@ function SBBJourneyList({
                 <div className="font-medium">{journey.departure.station.name}</div>
                 <div className="text-gray-500">
                   {formatTime(journey.departure.scheduledDeparture)}
-                  {originStop?.plannedPlatform && (
+                  {(originStop?.plannedPlatform || originStop?.actualPlatform) && (
                     <span className="ml-2">
                       Platform {originStop.actualPlatform ?? originStop.plannedPlatform}
                     </span>
@@ -1083,7 +1083,7 @@ function SBBJourneyList({
                 <div className="font-medium">{journey.arrival.station.name}</div>
                 <div className="text-gray-500">
                   {formatTime(journey.arrival.scheduledArrival)}
-                  {destStop?.plannedPlatform && (
+                  {(destStop?.plannedPlatform || destStop?.actualPlatform) && (
                     <span className="ml-2">
                       Platform {destStop.actualPlatform ?? destStop.plannedPlatform}
                     </span>
@@ -1356,9 +1356,9 @@ function StopItem({
         </div>
 
         {/* Platform info */}
-        {stop.platform && (
+        {(stop.platform || stop.plannedPlatform || stop.actualPlatform) && (
           <div className="mt-1 inline-block rounded bg-blue-100 px-2 py-0.5 text-xs text-blue-700">
-            Platform {stop.platform}
+            Platform {stop.actualPlatform ?? stop.plannedPlatform ?? stop.platform}
             {stop.plannedPlatform &&
               stop.actualPlatform &&
               stop.plannedPlatform !== stop.actualPlatform && (

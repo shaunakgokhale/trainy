@@ -16,6 +16,7 @@ class NSProvider implements TrainProvider {
   readonly id: ProviderID = "NS";
   readonly country: CountryCode = "NL";
   readonly name = "Nederlandse Spoorwegen";
+  readonly supportsNameQuery = true;
 
   /**
    * Search for stations using NS API
