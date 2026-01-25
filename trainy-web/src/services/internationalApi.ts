@@ -29,6 +29,7 @@ import {
   storeJourneys,
   getJourneyById,
   updateJourneyRealtime,
+  getJourneysByRoute,
 } from "./journeyStore";
 import type {
   Journey,
@@ -205,13 +206,41 @@ export async function searchStations(query: string): Promise<UnifiedStation[]> {
 export async function searchJourneys(
   fromStation: UnifiedStation,
   toStation: UnifiedStation,
-  dateTime: string
+  dateTime: string,
+  options?: { skipCache?: boolean }
 ): Promise<StoredJourney[]> {
   logInfo("Searching journeys", {
     from: fromStation.displayName,
     to: toStation.displayName,
     dateTime,
+    skipCache: options?.skipCache,
   });
+
+  // =============================================================================
+  // Cache Check: Return cached journeys if available
+  // =============================================================================
+  if (!options?.skipCache) {
+    const cachedJourneys = await getJourneysByRoute(
+      fromStation.id,
+      toStation.id,
+      dateTime,
+      12 // Look for journeys within 12 hours of requested time
+    );
+
+    if (cachedJourneys.length > 0) {
+      logInfo("Returning cached journeys from Supabase", {
+        count: cachedJourneys.length,
+        journeyKeys: cachedJourneys.map((j) => j.journeyKey),
+      });
+      return cachedJourneys;
+    }
+    
+    logInfo("No cached journeys found, querying APIs");
+  }
+
+  // =============================================================================
+  // API Query: Fetch fresh data from providers
+  // =============================================================================
 
   // Determine which providers to query
   const primaryProvider = getProviderForCountry(fromStation.country);
@@ -378,6 +407,50 @@ export async function searchJourneys(
                       }
                     }
                     logInfo("SBB Enrichment: Updated stops with SBB source", { stopsUpdated });
+                    
+                    // CRITICAL FIX: Ensure the final destination is in the stops array
+                    // NS API often puts the destination in 'arrival' but not in 'stops'
+                    // We need to add/update it so the platform data is preserved when stored
+                    const destNameLower = toStation.displayName.toLowerCase();
+                    const lastStop = firstJourney.stops[firstJourney.stops.length - 1];
+                    const lastStopMatchesDest = lastStop && (
+                      lastStop.station.name.toLowerCase().includes(destNameLower) ||
+                      destNameLower.includes(lastStop.station.name.toLowerCase())
+                    );
+                    
+                    if (!lastStopMatchesDest && swissArrival) {
+                      // Add the destination as a new stop with SBB platform data
+                      logInfo("SBB Enrichment: Adding destination to stops array", {
+                        destination: toStation.displayName,
+                        platform: swissArrival.platform,
+                        plannedPlatform: swissArrival.plannedPlatform,
+                        actualPlatform: swissArrival.actualPlatform,
+                      });
+                      firstJourney.stops.push({
+                        station: {
+                          name: toStation.displayName,
+                          code: toStation.providerIds.SBB ?? toStation.id,
+                          country: toStation.country,
+                        },
+                        scheduledArrival: firstJourney.arrival.scheduledArrival,
+                        platform: swissArrival.platform,
+                        plannedPlatform: swissArrival.plannedPlatform,
+                        actualPlatform: swissArrival.actualPlatform,
+                        source: "SBB",
+                      });
+                    } else if (lastStopMatchesDest && stopsUpdated === 0) {
+                      // Last stop matches destination but wasn't updated - update it now
+                      logInfo("SBB Enrichment: Updating last stop with destination platform", {
+                        lastStopName: lastStop?.station.name,
+                        platform: swissArrival.platform,
+                      });
+                      if (lastStop) {
+                        lastStop.platform = swissArrival.platform ?? lastStop.platform;
+                        lastStop.plannedPlatform = swissArrival.plannedPlatform ?? lastStop.plannedPlatform;
+                        lastStop.actualPlatform = swissArrival.actualPlatform ?? lastStop.actualPlatform;
+                        lastStop.source = "SBB";
+                      }
+                    }
                   } else {
                     logInfo("SBB Enrichment: No platform data in SBB response");
                   }
@@ -426,18 +499,43 @@ export async function searchJourneys(
 
   // Merge duplicate journeys from different providers
   const mergedJourneys = mergeJourneys(allJourneys, fromStation, toStation);
+  
+  logInfo("Merged journeys count", {
+    allJourneysCount: allJourneys.length,
+    mergedCount: mergedJourneys.length,
+  });
 
   // Convert to storage format and store
   const storageInputs = mergedJourneys.map((merged) =>
     toStoredJourneyInput(merged, fromStation, toStation)
   );
 
+  logInfo("Storage inputs prepared", {
+    count: storageInputs.length,
+    journeyKeys: storageInputs.map((i) => i.journeyKey),
+    destinations: storageInputs.map((i) => i.destinationStationId),
+  });
+
   // Store all journeys
   const storedJourneys = await storeJourneys(storageInputs);
 
+  logInfo("Storage result", {
+    inputCount: storageInputs.length,
+    storedCount: storedJourneys.length,
+    storedIds: storedJourneys.map((j) => j.id),
+  });
+
   // If storage failed, return in-memory versions
-  if (storedJourneys.length === 0) {
-    logInfo("Storage failed, returning in-memory journeys");
+  if (storedJourneys.length === 0 && storageInputs.length > 0) {
+    console.error("⚠️ STORAGE FAILED: All journeys failed to save to Supabase! Check [JourneyStore] logs above for errors.", {
+      inputCount: storageInputs.length,
+      sampleInput: storageInputs[0] ? {
+        journeyKey: storageInputs[0].journeyKey,
+        sources: storageInputs[0].sources,
+        stopsCount: storageInputs[0].stops.length,
+      } : null,
+    });
+    logInfo("Storage failed, returning in-memory journeys", { inputCount: storageInputs.length });
     return storageInputs.map((input, index) => ({
       ...input,
       id: `temp-${index}`,
@@ -776,7 +874,8 @@ function toStoredJourneyInput(
       scheduledDeparture: stop.scheduledDeparture,
       arrivalDelayMin: stop.arrivalDelay,
       departureDelayMin: stop.departureDelay,
-      plannedPlatform: stop.plannedPlatform,
+      // Use platform as fallback for plannedPlatform (SBB enrichment sets all three)
+      plannedPlatform: stop.plannedPlatform ?? stop.platform,
       actualPlatform: stop.actualPlatform,
       // Use stop's source if it was enriched by a specific API, otherwise use journey's primary source
       source: (stop.source as ApiSource) ?? merged.sources[0] as ApiSource,

@@ -129,7 +129,10 @@ function inputToStopInsert(
  * Uses journey_key for upsert logic
  */
 export async function storeJourney(input: StoredJourneyInput): Promise<StoredJourney | null> {
+  console.log(">>> storeJourney START:", input.journeyKey);
+  
   if (!isSupabaseConfigured()) {
+    console.error(">>> storeJourney: Supabase NOT configured!");
     logError("Supabase not configured, skipping store", null);
     return null;
   }
@@ -138,15 +141,28 @@ export async function storeJourney(input: StoredJourneyInput): Promise<StoredJou
 
   try {
     // Check if journey already exists
+    console.log(">>> Checking if journey exists...");
     const existing = await findJourneyByKey(input.journeyKey);
+    console.log(">>> findJourneyByKey result:", existing ? "EXISTS" : "NOT FOUND");
     
     if (existing) {
       logInfo("Journey exists, updating", { id: existing.id });
-      return updateJourney(existing.id, input);
+      const updated = await updateJourney(existing.id, input);
+      console.log(">>> updateJourney result:", updated ? "SUCCESS" : "NULL");
+      return updated;
     }
 
     // Insert new journey
     const journeyInsert = inputToJourneyInsert(input);
+    console.log(">>> Inserting new journey:", journeyInsert.journey_key);
+    logInfo("Attempting journey insert", {
+      journey_key: journeyInsert.journey_key,
+      train_number: journeyInsert.train_number,
+      origin: journeyInsert.origin_station_id,
+      destination: journeyInsert.destination_station_id,
+      sources: journeyInsert.sources,
+    });
+    
     const { data: journeyRow, error: journeyError } = await supabase
       .from("journeys")
       .insert(journeyInsert)
@@ -154,14 +170,24 @@ export async function storeJourney(input: StoredJourneyInput): Promise<StoredJou
       .single();
 
     if (journeyError) {
-      logError("Failed to insert journey", journeyError);
+      console.error(">>> INSERT FAILED:", journeyError.code, journeyError.message);
+      logError("Failed to insert journey", {
+        error: journeyError,
+        code: journeyError.code,
+        message: journeyError.message,
+        details: journeyError.details,
+        hint: journeyError.hint,
+        journeyKey: journeyInsert.journey_key,
+      });
       throw journeyError;
     }
 
+    console.log(">>> Journey inserted with ID:", journeyRow.id);
     logInfo("Journey inserted", { id: journeyRow.id });
 
     // Insert stops
     if (input.stops.length > 0) {
+      console.log(">>> Inserting", input.stops.length, "stops...");
       const stopsInsert = input.stops.map((stop) =>
         inputToStopInsert(stop, journeyRow.id)
       );
@@ -171,14 +197,21 @@ export async function storeJourney(input: StoredJourneyInput): Promise<StoredJou
         .insert(stopsInsert);
 
       if (stopsError) {
+        console.error(">>> Stops insert FAILED:", stopsError);
         logError("Failed to insert stops", stopsError);
         // Don't fail the whole operation, journey was created
+      } else {
+        console.log(">>> Stops inserted successfully");
       }
     }
 
     // Fetch and return the complete journey
-    return getJourneyById(journeyRow.id);
+    console.log(">>> Fetching complete journey by ID...");
+    const result = await getJourneyById(journeyRow.id);
+    console.log(">>> getJourneyById result:", result ? "SUCCESS" : "NULL");
+    return result;
   } catch (error) {
+    console.error("❌ storeJourney FAILED for", input.journeyKey, error);
     logError("storeJourney failed", error);
     return null;
   }
@@ -189,11 +222,16 @@ export async function storeJourney(input: StoredJourneyInput): Promise<StoredJou
  */
 export async function storeJourneys(inputs: StoredJourneyInput[]): Promise<StoredJourney[]> {
   if (!isSupabaseConfigured()) {
+    console.error("❌ SUPABASE NOT CONFIGURED! Check VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in .env.local");
     logError("Supabase not configured, skipping batch store", null);
     return [];
   }
 
-  logInfo("Storing journeys batch", { count: inputs.length });
+  console.log("✅ Supabase is configured, attempting to store", inputs.length, "journeys");
+  logInfo("Storing journeys batch", { 
+    count: inputs.length,
+    journeyKeys: inputs.map(i => i.journeyKey),
+  });
 
   const results: StoredJourney[] = [];
 
@@ -201,13 +239,22 @@ export async function storeJourneys(inputs: StoredJourneyInput[]): Promise<Store
   const promises = inputs.map((input) => storeJourney(input));
   const settled = await Promise.allSettled(promises);
 
-  for (const result of settled) {
+  for (let i = 0; i < settled.length; i++) {
+    const result = settled[i];
     if (result.status === "fulfilled" && result.value) {
       results.push(result.value);
+    } else if (result.status === "rejected") {
+      logError(`Journey ${i} storage rejected`, result.reason);
+    } else if (result.status === "fulfilled" && !result.value) {
+      logError(`Journey ${i} storage returned null`, { journeyKey: inputs[i].journeyKey });
     }
   }
 
-  logInfo("Batch store complete", { stored: results.length, total: inputs.length });
+  logInfo("Batch store complete", { 
+    stored: results.length, 
+    total: inputs.length,
+    failed: inputs.length - results.length,
+  });
   return results;
 }
 
@@ -386,6 +433,80 @@ export async function updateJourneyRealtime(
   } catch (error) {
     logError("updateJourneyRealtime failed", error);
     return null;
+  }
+}
+
+/**
+ * Get cached journeys by route (origin + destination + date range)
+ * This is the primary cache lookup function for avoiding redundant API calls
+ */
+export async function getJourneysByRoute(
+  originStationId: string,
+  destinationStationId: string,
+  dateTime: string,
+  timeWindowHours = 12,
+  limit = 20
+): Promise<StoredJourney[]> {
+  if (!isSupabaseConfigured()) {
+    return [];
+  }
+
+  logInfo("Cache lookup: searching for cached journeys", {
+    origin: originStationId,
+    destination: destinationStationId,
+    dateTime,
+    timeWindowHours,
+  });
+
+  try {
+    // Calculate time range for cache lookup
+    const searchDate = new Date(dateTime);
+    const startTime = new Date(searchDate.getTime() - timeWindowHours * 60 * 60 * 1000);
+    const endTime = new Date(searchDate.getTime() + timeWindowHours * 60 * 60 * 1000);
+
+    const { data: journeyRows, error } = await supabase
+      .from("journeys")
+      .select("*")
+      .eq("origin_station_id", originStationId)
+      .eq("destination_station_id", destinationStationId)
+      .gte("scheduled_departure", startTime.toISOString())
+      .lte("scheduled_departure", endTime.toISOString())
+      .order("scheduled_departure", { ascending: true })
+      .limit(limit);
+
+    if (error) {
+      logError("Cache lookup failed", error);
+      return [];
+    }
+
+    if (journeyRows.length === 0) {
+      logInfo("Cache miss: no cached journeys found");
+      return [];
+    }
+
+    logInfo("Cache hit: found cached journeys", { count: journeyRows.length });
+
+    // Fetch stops for all journeys
+    const journeyIds = journeyRows.map((j) => j.id);
+    const { data: allStops } = await supabase
+      .from("journey_stops")
+      .select("*")
+      .in("journey_id", journeyIds);
+
+    // Group stops by journey
+    const stopsByJourney = new Map<string, JourneyStopRow[]>();
+    for (const stop of allStops ?? []) {
+      const existing = stopsByJourney.get(stop.journey_id) ?? [];
+      existing.push(stop);
+      stopsByJourney.set(stop.journey_id, existing);
+    }
+
+    return journeyRows.map((row) =>
+      rowToStoredJourney(row, stopsByJourney.get(row.id) ?? [])
+    );
+  } catch (error) {
+    logError("getJourneysByRoute failed", error);
+    return [];
   }
 }
 
